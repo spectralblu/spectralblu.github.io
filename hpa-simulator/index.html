@@ -1,0 +1,2563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet A vs Fleet B — HPA discrete event simulation (v2 engine)</title>
+<style>
+  :root {
+    --bg: #0a0e15; --panel: #0e131c; --panel2: #141b27; --line: #1e2836;
+    --text: #d7e0ea; --muted: #66788f;
+    --busy: #3ecf8e; --blue: #5b9dff; --orange: #e6b455; --green: #4ade80;
+    --red: #f4695f; --pink: #e06c9a;
+    font-size: 14px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  header { position: sticky; top: 0; z-index: 10; background: rgba(10,14,21,.94);
+    backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); padding: 7px 16px; }
+  h1 { font-size: .9rem; margin: 0 0 5px; font-weight: 600; }
+  h1 small { color: var(--muted); font-weight: 400; margin-left: 10px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+  .grp { display: flex; align-items: center; gap: 6px; }
+  .grp label { color: var(--muted); font-size: .74rem; white-space: nowrap; }
+  input[type=number] { width: 58px; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px;
+    font: inherit; font-size: .78rem; }
+  select { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 5px; padding: 3px 6px; font: inherit; font-size: .78rem; }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 5px; padding: 4px 12px; cursor: pointer; font: inherit; font-size: .8rem; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: #1d3a5f; border-color: var(--blue); color: #cfe2ff; }
+  .clock { color: var(--muted); min-width: 76px; }
+  .adv { display: none; margin-top: 8px; }
+  .adv.open { display: flex; }
+  .cfg { display: none; margin-top: 8px; gap: 12px;
+    grid-template-columns: 1fr 1fr; align-items: start; }
+  .cfg.open { display: grid; }
+  @media (max-width: 1100px) { .cfg.open { grid-template-columns: 1fr; } }
+  .yamlbox { margin: 0; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 14px; font-size: .78rem; line-height: 1.6;
+    color: var(--muted); overflow-x: auto; }
+  .yamlbox .k { color: var(--text); }
+  .yamlbox .v { color: var(--blue); }
+  .yamlbox .cm { color: #44607e; }
+  .yamlbox input { width: 54px; padding: 0 4px; background: transparent; border: none;
+    border-bottom: 1px dashed var(--muted); border-radius: 0; color: var(--orange);
+    font: inherit; }
+  .yamlbox select { padding: 0 2px; background: transparent; border: none;
+    border-bottom: 1px dashed var(--muted); border-radius: 0; color: var(--orange);
+    font: inherit; }
+  main { padding: 10px 14px 20px; max-width: 1760px; margin: 0 auto; }
+  .fleet-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: stretch; }
+  @media (max-width: 860px) { .fleet-wrap { grid-template-columns: 1fr; } }
+  section.fleet { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 12px 14px; min-width: 0;
+    display: flex; flex-direction: column; }
+  .fleet h2 { margin: 0; font-size: .95rem; font-weight: 600; }
+  .fleet h2 .aw { color: var(--orange); } .fleet h2 .bw { color: var(--green); }
+  .sub { color: var(--muted); font-size: .72rem; margin: 4px 0 9px; }
+  /* the one metric this HPA scales on, inline in the fleet box */
+  .fyaml { margin: 0 0 9px; padding: 7px 10px; background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 8px; font-size: .72rem;
+    line-height: 1.55; color: var(--text); overflow-x: auto; }
+  .fyaml .cm { color: #44607e; }
+  .fyaml .k { color: var(--muted); }
+  .fyaml input { width: 46px; padding: 0 4px; background: transparent; border: none;
+    border-bottom: 1px dashed var(--muted); border-radius: 0; color: var(--orange);
+    font: inherit; }
+  .fyaml select { padding: 0 2px; background: transparent; border: none;
+    border-bottom: 1px dashed var(--muted); border-radius: 0; color: var(--orange);
+    font: inherit; }
+  /* oldest-wait: fade instead of flicker — dim while it's a held/frozen reading,
+     faintest when truly empty (the text itself never toggles rapidly, see drawFleet) */
+  .qline #qoA, .qline #qoB { transition: opacity .6s ease, color .6s ease; }
+  .qline #qoA.stale, .qline #qoB.stale { opacity: .55; font-weight: 400; }
+  .qline #qoA.empty, .qline #qoB.empty { opacity: .35; font-weight: 400; }
+  .qline { display: flex; justify-content: space-between; align-items: baseline;
+    font-size: .8rem; margin-bottom: 6px; }
+  .qline b { color: #fff; font-weight: 600; }
+  .qline .arr { color: var(--green); font-size: .78rem; opacity: 0; }
+  .qline .arr.flash { animation: flash 1.6s ease-out; }
+  @keyframes flash { 0% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; } }
+  /* reserved-height zones: queue chips & pod grid keep a fixed footprint so the
+     gauge / sparklines / log sit at the SAME height in both fleets — the whole
+     point of side-by-side is not having to chase the eye between panels */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; height: 48px;   /* exactly 2 rows, fixed */
+    overflow: hidden; margin-bottom: 10px; align-content: flex-start; }
+  .chip { width: 27px; height: 21px; border-radius: 6px; background: var(--panel2);
+    border: 1px solid var(--line); flex: none; }
+  .chip.next { border: 2px solid var(--blue); background: transparent; }
+  .chip.rq { border-color: var(--pink); background: color-mix(in srgb, var(--pink) 18%, var(--panel2)); }
+  .chip.more { width: auto; padding: 0 8px; display: grid; place-items: center;
+    color: var(--muted); font-size: .68rem; border-style: dashed; }
+  .chip.land { animation: land .5s ease-out; }
+  @keyframes land { from { transform: translateY(-10px) scale(1.3); opacity: 0; } to { opacity: 1; } }
+  /* rack sized to maxReplicas (rows = ceil(max/4)): pods arriving/leaving can't
+     shove the gauge, sparklines and log around — the box only resizes when the
+     YAML's maxReplicas changes, never mid-simulation */
+  .pods { --rows: 3; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: repeat(var(--rows), minmax(0, 1fr)); gap: 8px;
+    height: calc(var(--rows) * 70px + (var(--rows) - 1) * 8px);
+    overflow: hidden; margin-bottom: 2px; transition: height .25s ease; }
+  .pod { background: var(--panel2); border: 1px solid var(--line); border-radius: 9px;
+    padding: 6px 8px 8px; min-height: 0; overflow: hidden; }
+  .phead { display: flex; justify-content: space-between; align-items: center; font-size: .72rem;
+    color: var(--muted); margin-bottom: 6px; }
+  .phead .glyph { font-size: .85rem; font-weight: 700; color: var(--muted); }
+  .phead .glyph.start { color: var(--blue); }
+  .phead .glyph.proc { color: var(--busy); }
+  .phead .glyph.term { color: var(--red); }
+  .phead b { color: var(--text); font-weight: 600; }
+  .pod.ghost { border-style: dashed; border-color: #182233; background: transparent;
+    display: grid; place-items: center; color: var(--muted); font-size: .72rem; }
+  .pod.starting { border-style: dashed; opacity: .65; }
+  .pod.term { border-color: color-mix(in srgb, var(--red) 55%, var(--line)); opacity: .8; }
+  .slots { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+  .slot { height: 13px; border-radius: 4px; background: #1a2331; }
+  .slot.busy { background: var(--busy); }
+  .slot.rq { background: var(--pink); }
+  .spacer { flex: 1 1 18px; min-height: 18px; }
+  .glabel { display: flex; justify-content: space-between; font-size: .8rem; margin-bottom: 6px; }
+  .glabel .k { color: var(--muted); } .glabel .v { color: #fff; font-weight: 600; }
+  .gbar { position: relative; height: 11px; border-radius: 6px; background: #151d2a;
+    border: 1px solid var(--line); overflow: visible; margin-bottom: 3px; }
+  .gfill { position: absolute; inset: 2px auto 2px 2px; width: 0; border-radius: 5px;
+    background: var(--muted); transition: width .15s linear, background .3s; z-index: 2; }
+  /* fill takes the colour of the action the reading would trigger */
+  .gfill.hot { background: var(--blue); }    /* over aim → scale up */
+  .gfill.cold { background: var(--red); }    /* under aim → scale down */
+  .gtick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text); opacity: .8; z-index: 3; }
+  /* deadband zones painted on the bar: ratio < 0.9 → hpa scales down,
+     0.9–1.1 → deadband (no action), > 1.1 → scales up */
+  .gzone { position: absolute; top: 0; bottom: 0; z-index: 1; }
+  .gzone.down { background: rgba(244,105,95,.16); left: 0; border-radius: 5px 0 0 5px; }
+  .gzone.hold { background: rgba(102,120,143,.30); }
+  .gzone.up { background: rgba(91,157,255,.14); right: 0; border-radius: 0 5px 5px 0; }
+  .gsub { position: relative; height: 1em; margin-bottom: 9px; }
+  .gsub i { position: absolute; transform: translateX(-50%); font-style: normal;
+    font-size: .66rem; color: var(--muted); white-space: nowrap; }
+  /* next-check countdown: fills down the full height of the charts, resetting
+     to full on each reconciliation — the HPA poll loop, made visible */
+  .chartrow { display: flex; gap: 10px; align-items: stretch; margin-bottom: 16px; }
+  .chartrow .charts { flex: 1; margin-bottom: 0; }
+  .nxt { display: flex; flex-direction: column; align-items: center; gap: 4px;
+    width: 14px; cursor: help; }
+  .nxtTrack { flex: 1; width: 4px; border-radius: 2px; background: #151d2a;
+    border: 1px solid var(--line); position: relative; overflow: hidden; }
+  .nxtFill { position: absolute; inset: auto 0 0 0; height: 100%;
+    background: var(--blue); opacity: .75; }
+  .nxtN { font-size: .62rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 10px; }
+  .chart.ux { margin-bottom: 16px; }
+  .ux .ct b.r { color: var(--red); font-weight: 400; }
+  .ux .ct b.o { color: var(--orange); font-weight: 400; }
+  .ux .ct b.b { color: var(--blue); font-weight: 400; }
+  .chart .ct { font-size: .73rem; color: var(--text); margin-bottom: 4px; }
+  .chart canvas { width: 100%; height: 92px; display: block; }
+  .log { border-top: 1px solid var(--line); padding-top: 8px;
+    font-size: .74rem; line-height: 1.62; height: 126px; overflow-y: auto;
+    scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  .log::-webkit-scrollbar { width: 6px; }
+  .log::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+  .logwrap { position: relative; }
+  .logpause { position: absolute; top: 11px; right: 10px; z-index: 2; display: none;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    color: var(--muted); font-size: .66rem; line-height: 1.3; padding: 2px 6px;
+    cursor: pointer; }
+  .logpause:hover { color: var(--text); border-color: var(--muted); }
+  .logpause.on { display: block; }
+  .log .up { color: var(--green); } .log .down { color: var(--red); }
+  .log .kill { color: var(--pink); } .log .info { color: var(--muted); }
+  .log .t { color: #4b5a6f; margin-right: 6px; }
+  .log .hl { cursor: help; }
+  .log .hl:hover { text-decoration: underline dotted var(--muted) 1px; text-underline-offset: 3px; }
+  #mathTip { position: fixed; z-index: 50; display: none; max-width: 730px;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 13px 16px; font-size: .88rem; line-height: 1.6; color: var(--muted);
+    box-shadow: 0 6px 24px rgba(0,0,0,.5); pointer-events: none; }
+  #mathTip b { color: var(--text); }
+  #mathTip .mh { color: var(--text); display: block; margin-bottom: 8px; }
+  #mathTip .verdict { color: var(--text); font-size: .94rem; line-height: 1.55;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 5px;
+    padding: 7px 11px; margin-bottom: 12px; }
+  #mathTip .k, #mathTip code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: .8rem; color: var(--blue); background: #101725; border-radius: 3px;
+    padding: 0 4px; white-space: nowrap; }
+  #mathTip .pk { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: .74rem; color: #4b5a6f; margin-top: 2px; white-space: normal; }
+  #mathTip .own { color: var(--muted); text-transform: none; letter-spacing: 0;
+    font-size: .74rem; }
+  #mathTip .psec.owner .ph i { color: var(--text); }
+  /* three phases, stacked in the order the controller runs them. Every phase
+     that ran is shown at full strength — a later phase only exists because the
+     earlier ones fed it. The border colour says what each phase did to the
+     number: green moved it, red blocked/capped it, grey passed it through. */
+  #mathTip .psec { border-left: 2px solid var(--line); padding: 0 0 0 11px;
+    margin: 0 0 12px; }
+  #mathTip .psec:last-child { margin-bottom: 0; }
+  #mathTip .ph { display: flex; justify-content: space-between; align-items: baseline;
+    gap: 14px; }
+  #mathTip .ph i { font-style: normal; font-size: .78rem; text-transform: uppercase;
+    letter-spacing: .07em; color: #4b5a6f; }
+  #mathTip .ph b { font-size: 1.05rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #mathTip .pb { font-size: .84rem; line-height: 1.55; margin-top: 3px; }
+  #mathTip .psec.stop { border-left-color: var(--red); }
+  #mathTip .psec.stop .ph b { color: var(--red); }
+  #mathTip .psec.hit { border-left-color: var(--green); }
+  #mathTip .psec.hit .ph b { color: var(--green); }
+  #mathTip .psec.pass { border-left-color: var(--line); }
+  #mathTip .warn { color: var(--red); }
+  #mathTip .ok { color: var(--green); }
+  #mathTip .fine { color: #55657c; font-size: .72rem; }
+  /* the canonical HPA formula, drawn AS the equation: a real fraction —
+     (currentReplicas × currentMetricValue) over desiredMetricValue — with
+     this check's live numbers inside each box. Serif italic labels, like
+     the textbook rendering. */
+  #mathTip .fraceq { display: flex; flex-wrap: wrap; align-items: center;
+    gap: 7px; margin: 4px 0 9px;
+    font-family: Georgia, 'Times New Roman', serif; }
+  #mathTip .lhs { font-style: italic; font-size: 1.02rem; color: var(--text); }
+  #mathTip .frac { display: flex; flex-direction: column; align-items: center;
+    gap: 6px; flex: 0 1 auto; }
+  #mathTip .num { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px;
+    justify-content: center; }
+  #mathTip .den { display: flex; justify-content: center; }
+  #mathTip .fbar { width: 100%; height: 0; border-top: 2px solid var(--muted); }
+  #mathTip .fraceq .cbox { flex: 0 0 auto; min-width: 84px; }
+  #mathTip .fraceq .cbox b { font-family: var(--font-sans, inherit); }
+  /* every diagram row is the SAME 7-column grid — box · box · box · result —
+     so the boxes and all three cards' result heroes line up in one column */
+  #mathTip .eqrow { display: grid; align-items: stretch; gap: 6px;
+    grid-template-columns: minmax(0,1fr) 26px minmax(0,1fr) 26px minmax(0,1fr) 26px 140px;
+    margin: 2px 0 7px; }
+  #mathTip .eqrow .cbox { min-width: 0; }
+  #mathTip .gc1 { grid-column: 1; } #mathTip .gc3 { grid-column: 3; }
+  #mathTip .gc5 { grid-column: 5; } #mathTip .gc6 { grid-column: 6; }
+  #mathTip .gc7 { grid-column: 7; }
+  #mathTip .gc1to5 { grid-column: 1 / 6; min-width: 0; }
+  #mathTip .eqrow .fraceq { margin: 0; }
+  #mathTip .eqrow .fraceq .cbox { min-width: 84px; }
+  /* the memory pool: recent desired counts as chips, newest = this check */
+  /* bottom margin = the corridor the chip→clamp connector curves run through */
+  #mathTip .poolrow { margin: 2px 0 14px; }
+  #mathTip .poolhead { font-size: .66rem; text-transform: uppercase;
+    letter-spacing: .06em; color: #4b5a6f; margin-bottom: 4px; }
+  #mathTip .pool { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; min-width: 0; }
+  #mathTip .chip { display: inline-flex; align-items: center; gap: 5px;
+    justify-content: center; font-variant-numeric: tabular-nums; font-size: .95rem;
+    min-width: 52px; padding: 4px 10px; border: 1px solid var(--line);
+    border-radius: 6px; background: var(--panel); color: var(--text); }
+  #mathTip .chip s { text-decoration: none; color: var(--muted); font-size: .62rem;
+    border: 1px solid var(--line); border-radius: 4px; padding: 0 4px;
+    line-height: 1.5; align-self: center; }
+  #mathTip .chip.now { border-color: var(--blue); color: var(--blue);
+    box-shadow: 0 0 0 1px var(--blue); }
+  #mathTip .chip.now s { border-color: var(--blue); color: var(--blue); }
+  #mathTip .chip.old { color: var(--muted); border-style: dashed; }
+  /* too old for the scaleUp window — feeds only the upper clamp */
+  #mathTip .chip.dn { opacity: .55; }
+  /* the two extracted chips take the colour of the trace + clamp they feed */
+  #mathTip .chip#chipL { border-color: var(--blue); color: var(--blue); }
+  #mathTip .chip#chipH { border-color: var(--orange); color: var(--orange); }
+  /* chip → clamp connectors, drawn after layout against real box positions */
+  #mathTip svg.clamplink { position: absolute; left: 0; top: 0;
+    pointer-events: none; z-index: 4; overflow: visible; }
+  #mathTip svg.clamplink path { fill: none; stroke-width: 1.6; }
+  #mathTip svg.clamplink path.ah { stroke-linecap: round; }
+  #mathTip svg.clamplink path.lc { stroke: var(--blue); }
+  #mathTip svg.clamplink path.uc { stroke: var(--orange); }
+  /* the clamp boxes take their trace's colour so chip and box read as pairs */
+  #mathTip .cbox[data-clampto="lc"] { border-color: var(--blue); }
+  #mathTip .cbox[data-clampto="lc"] i { color: var(--blue); }
+  #mathTip .cbox[data-clampto="uc"] { border-color: var(--orange); }
+  #mathTip .cbox[data-clampto="uc"] i { color: var(--orange); }
+
+  /* the ↓ lives inside the column cell, below its box — centered on the box
+     itself, not on a narrow grid track between boxes */
+  #mathTip .cell { display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
+  #mathTip .cell .cbox { flex: 1; min-width: 0; }
+  #mathTip .cell .drop { text-align: center; color: var(--muted);
+    font-size: 1.5rem; line-height: 1.1; height: 1.1em; }
+  #mathTip .cbox { display: flex; flex-direction: column; align-items: center;
+    gap: 1px; flex: 1 1 90px; min-width: 86px; padding: 6px 8px;
+    border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+  #mathTip .cbox i { font-style: normal; font-size: .66rem; text-transform: uppercase;
+    letter-spacing: .06em; color: #4b5a6f; }
+  #mathTip .cbox b { font-size: 1.5rem; line-height: 1.15; color: var(--text);
+    font-variant-numeric: tabular-nums; }
+  #mathTip .cbox em { font-style: normal; font-size: .64rem; color: var(--muted);
+    text-align: center; }
+  #mathTip .cbox.mid b { color: var(--blue); }
+  #mathTip .car { align-self: center; color: var(--muted); font-size: 1.5rem; line-height: 1; }
+  /* every card's result box lives in grid column 7 — same size, same edge,
+     so the three cards' heroes stack in one aligned column. Never stretch:
+     next to the tall fraction in card ① it would balloon to row height. */
+  #mathTip .cbox.res { border-color: var(--muted); align-self: center; }
+  #mathTip .cbox.res.up { border-color: var(--green); }
+  #mathTip .cbox.res.up b { color: var(--green); }
+  #mathTip .cbox.res.down { border-color: var(--red); }
+  #mathTip .cbox.res.down b { color: var(--red); }
+  .legend { margin-top: 18px; display: flex; flex-direction: column; gap: 6px;
+    font-size: .72rem; color: var(--muted); }
+  .legend .lrow { display: flex; flex-wrap: wrap; gap: 14px; align-items: baseline; }
+  .legend .lh { color: #4b5a6f; text-transform: uppercase; letter-spacing: .08em;
+    font-size: .62rem; width: 52px; flex: none; }
+  .legend .sw { display: inline-block; width: 14px; height: 2px; vertical-align: middle;
+    margin-right: 5px; border-radius: 1px; }
+  details.math { margin-top: 10px; font-size: .72rem; color: var(--muted); }
+  details.math summary { cursor: pointer; color: var(--text); }
+  details.math .mcol { max-width: 72ch; line-height: 1.6; padding-top: 6px; }
+  details.math p { margin: 0 0 8px; }
+  .note b { color: var(--text); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fleet A vs Fleet B — HPA discrete event simulation
+    <small>same jobs, same queue — only the autoscaler metric differs</small></h1>
+  <div class="bar">
+    <button id="btnPlay" class="primary">▶ run</button>
+    <button id="btnReset">reset</button>
+    <button id="btnSkip" title="jump the simulation ahead so the trend charts fill up">⏩ skip 5m</button>
+    <div class="grp"><label>speed</label>
+      <select id="selSpeed">
+        <option value="1">1×</option><option value="4">4×</option>
+        <option value="10">10×</option><option value="30" selected>30×</option>
+        <option value="100">100×</option><option value="300">300×</option>
+      </select></div>
+    <div class="grp"><label>window</label>
+      <select id="selSpan" title="how much history the trend graphs show">
+        <option value="900" selected>15m</option><option value="1800">30m</option>
+        <option value="3600">60m</option><option value="7200">120m</option>
+      </select></div>
+    <div class="clock" id="clock">t 00:00</div>
+    <div class="grp"><label>pattern</label>
+      <select id="selPattern">
+        <option value="steady" selected>steady</option>
+        <option value="ramp">ramp-up then plateau</option>
+        <option value="diurnal">waves</option>
+        <option value="idleburst">idle + bursts</option>
+      </select></div>
+    <div class="grp"><label>λ jobs/min</label><input type="number" id="inpRate" value="80" min="1" step="10"></div>
+    <div class="grp"><label>burst</label><input type="number" id="inpBurst" value="200" min="1" step="25" style="width:60px">
+      <button id="btnBurst">inject</button></div>
+    <div class="grp"><label>seed</label><input type="number" id="inpSeed" value="1234" style="width:70px">
+      <button id="btnDice">🎲</button></div>
+    <button id="btnCfg">shared config ▾</button>
+  </div>
+</header>
+<main>
+  <div class="cfg" id="cfgBar">
+<pre class="yamlbox"><span class="k">apiVersion:</span> apps/v1
+<span class="k">kind:</span> Deployment
+<span class="k">spec:</span>
+  <span class="k">replicas:</span> <span class="v">3</span>  <span class="cm"># baseline = minReplicas; HPA owns this field from t=0</span>
+  <span class="k">template:</span>
+    <span class="k">spec:</span>
+      <span class="k">terminationGracePeriodSeconds:</span> <input id="inpGrace" type="number" value="30" min="0" step="1">
+      <span class="k">containers:</span>
+        - <span class="k">name:</span> worker
+          <span class="k">image:</span> worker:1
+          <span class="k">args:</span> [<span class="v">--concurrency=10</span>]   <span class="cm"># 10 in-process slots per pod</span>
+          <span class="k">env:</span>
+            - <span class="k">name:</span> JOB_DURATION_MEAN_S  <span class="k">value:</span> <span class="v">"</span><input id="inpDur" type="number" value="30" min="0.5" step="1"><span class="v">"</span>
+            - <span class="k">name:</span> JOB_DURATION_SIGMA   <span class="k">value:</span> <span class="v">"</span><input id="inpSigma" type="number" value="0.6" min="0" step="0.1"><span class="v">"</span>
+              <span class="cm"># job runtime ~ lognormal(mean, sigma)</span>
+            - <span class="k">name:</span> POLL_INTERVAL_S      <span class="k">value:</span> <span class="v">"</span><input id="inpPoll" type="number" value="1" min="0.2" step="0.5"><span class="v">"</span>
+              <span class="cm"># how often each worker pulls from the queue (±50% jitter)</span>
+          <span class="k">startupProbe:</span>
+            <span class="k">initialDelaySeconds:</span> <input id="inpStart" type="number" value="5" min="0" step="1">  <span class="cm"># pod → Ready</span>
+</pre>
+<pre class="yamlbox"><span class="k">apiVersion:</span> autoscaling/v2
+<span class="k">kind:</span> HorizontalPodAutoscaler
+<span class="k">spec:</span>
+  <span class="k">minReplicas:</span> <input id="yMin" type="number" value="3" min="0">
+  <span class="k">maxReplicas:</span> <input id="yMax" type="number" value="12" min="1" max="20">
+  <span class="k">behavior:</span>
+    <span class="k">scaleUp:</span>
+      <span class="k">stabilizationWindowSeconds:</span> <input id="yUpWin" type="number" value="60" min="0" step="15">
+      <span class="k">policies:</span>
+        - <span class="k">type:</span> Pods      <span class="k">value:</span> <input id="yUpPods" type="number" value="2" min="0"> <span class="k">periodSeconds:</span> <input id="yUpPodsPer" type="number" value="60" min="1" step="15">
+        - <span class="k">type:</span> Percent   <span class="k">value:</span> <input id="yUpPct" type="number" value="50" min="0" step="5"> <span class="k">periodSeconds:</span> <input id="yUpPctPer" type="number" value="60" min="1" step="15">
+      <span class="k">selectPolicy:</span> <select id="yUpSel"><option>Max</option><option>Min</option><option>Disabled</option></select>
+    <span class="k">scaleDown:</span>
+      <span class="k">stabilizationWindowSeconds:</span> <input id="yDnWin" type="number" value="300" min="0" step="15">
+      <span class="k">policies:</span>
+        - <span class="k">type:</span> Pods      <span class="k">value:</span> <input id="yDnPods" type="number" value="1" min="0"> <span class="k">periodSeconds:</span> <input id="yDnPodsPer" type="number" value="60" min="1" step="15">
+        - <span class="k">type:</span> Percent   <span class="k">value:</span> <input id="yDnPct" type="number" value="25" min="0" step="5"> <span class="k">periodSeconds:</span> <input id="yDnPctPer" type="number" value="60" min="1" step="15">
+      <span class="k">selectPolicy:</span> <select id="yDnSel"><option>Min</option><option>Max</option><option>Disabled</option></select>
+  <span class="cm"># --horizontal-pod-autoscaler-sync-period:</span> <input id="ySync" type="number" value="30" min="1" step="15"><span class="cm">s</span>
+  <span class="cm"># metrics-server update window:</span> <input id="yMetWin" type="number" value="60" min="1" step="15"><span class="cm">s</span>
+</pre>
+  </div>
+  <div class="fleet-wrap">
+    <section class="fleet" id="fleetA">
+      <h2>Fleet A — autoscales on <span class="aw">queue wait</span></h2>
+      <pre class="fyaml">- <span class="k">type:</span> External
+  <span class="k">external:</span>
+    <span class="k">metric:</span> { <span class="k">name:</span> queue_wait_seconds }
+    <span class="k">target:</span> { <span class="k">type:</span> <select id="selModeA"><option value="value" selected>Value</option><option value="avg">AverageValue</option></select>, <span class="k">value:</span> <input id="inpTA" type="number" value="1" min="0.1" step="0.5">s }</pre>
+      <div class="qline"><span>queue <b id="qnA">0</b> waiting · oldest <b id="qoA">—</b></span><span class="arr" id="arrA"></span></div>
+      <div class="chips" id="chipsA"></div>
+      <div class="pods" id="podsA"></div>
+      <div class="spacer"></div>
+      <div class="glabel"><span class="k" id="gkA">task wait in line (s) · aim 1s</span><span class="v" id="gvA">—</span></div>
+      <div class="gbar"><div class="gzone down" id="gzAn"></div><div class="gzone hold" id="gzAh"></div><div class="gzone up" id="gzAu"></div><div class="gfill" id="gfA"></div><div class="gtick" id="gtA"></div></div>
+      <div class="gsub" id="gsA"></div>
+      <div class="chartrow">
+        <div class="nxt" id="nxtA" title="next HPA check">
+          <div class="nxtTrack"><div class="nxtFill" id="nxfA"></div></div>
+          <span class="nxtN" id="nxnA">–</span>
+        </div>
+        <div class="charts">
+          <div class="chart"><div class="ct" id="ctP_A">pods (3–9)</div><canvas id="chP_A"></canvas></div>
+          <div class="chart"><div class="ct" id="ctM_A">wait ÷ 3× aim · dashed = aim</div><canvas id="chM_A"></canvas></div>
+        </div>
+      </div>
+      <div class="chart ux"><div class="ct" id="ctU_A">end-user experience</div><canvas id="chU_A"></canvas></div>
+      <div class="logwrap"><span class="logpause" id="pA" title="history paused — click to resume">⏸ resume</span><div class="log" id="logA"></div></div>
+    </section>
+    <section class="fleet" id="fleetB">
+      <h2>Fleet B — autoscales on <span class="bw">slot fullness</span></h2>
+      <pre class="fyaml">- <span class="k">type:</span> Pods
+  <span class="k">pods:</span>
+    <span class="k">metric:</span> { <span class="k">name:</span> busy_slots }
+    <span class="k">target:</span> { <span class="k">type:</span> Utilization, <span class="k">averageUtilization:</span> <input id="inpTB" type="number" value="70" min="5" step="5">% }</pre>
+      <div class="qline"><span>queue <b id="qnB">0</b> waiting · oldest <b id="qoB">—</b></span><span class="arr" id="arrB"></span></div>
+      <div class="chips" id="chipsB"></div>
+      <div class="pods" id="podsB"></div>
+      <div class="spacer"></div>
+      <div class="glabel"><span class="k" id="gkB">slot fullness · aim 70%</span><span class="v" id="gvB">—</span></div>
+      <div class="gbar"><div class="gzone down" id="gzBn"></div><div class="gzone hold" id="gzBh"></div><div class="gzone up" id="gzBu"></div><div class="gfill" id="gfB"></div><div class="gtick" id="gtB"></div></div>
+      <div class="gsub" id="gsB"></div>
+      <div class="chartrow">
+        <div class="nxt" id="nxtB" title="next HPA check">
+          <div class="nxtTrack"><div class="nxtFill" id="nxfB"></div></div>
+          <span class="nxtN" id="nxnB">–</span>
+        </div>
+        <div class="charts">
+          <div class="chart"><div class="ct" id="ctP_B">pods (3–9)</div><canvas id="chP_B"></canvas></div>
+          <div class="chart"><div class="ct" id="ctM_B">fullness ÷ 3× aim · dashed = aim</div><canvas id="chM_B"></canvas></div>
+        </div>
+      </div>
+      <div class="chart ux"><div class="ct" id="ctU_B">end-user experience</div><canvas id="chU_B"></canvas></div>
+      <div class="logwrap"><span class="logpause" id="pB" title="history paused — click to resume">⏸ resume</span><div class="log" id="logB"></div></div>
+    </section>
+  </div>
+  <div class="legend">
+    <div class="lrow"><span class="lh">pods</span>
+      <span style="color:var(--blue)">↑ starting</span><span style="color:var(--busy)">▶ processing</span>
+      <span style="color:var(--muted)">◦ idle</span><span style="color:var(--red)">↓ shutting down</span>
+      <span style="color:var(--pink)">■ job requeued after a kill</span></div>
+    <div class="lrow"><span class="lh">graphs</span>
+      <span><i class="sw" style="background:var(--blue)"></i>replicas · / arrivals/min</span>
+      <span><i class="sw" style="background:#94a3b8"></i>wanted (pre-restriction)</span>
+      <span><i class="sw" style="background:var(--red)"></i>worst live wait</span>
+      <span><i class="sw" style="background:var(--orange)"></i>p95 turnaround</span></div>
+    <div class="lrow"><span class="lh">model</span>
+      <span>queue is <b>pull</b>: jobs wait for a pod's own poll tick · scale-down drains for
+      <b>grace</b>, unfinished jobs requeue</span></div>
+  </div>
+  <details class="math">
+    <summary>glossary — how an HPA decides, and why the two fleets diverge</summary>
+    <div class="mcol">
+      <p><b>Stabilization windows</b> (<code>behavior.scaleUp/scaleDown.stabilizationWindowSeconds</code>):
+        every few seconds the HPA computes a desired pod count; the windows remember those recent answers.
+        The <b>scaleUp window</b> scans the last N seconds and keeps the <b>lowest</b> answer — the result can
+        never land lower than it. The <b>scaleDown window</b> keeps the <b>highest</b> — the result can never
+        land higher. The answer itself starts at your <i>current</i> count and gets clamped between those two;
+        today's fresh reading only joins the memory pool. That's why a fleet lags a burst by a minute and
+        refuses to shrink for five: one old busy (or quiet) moment inside the window pins the range.</p>
+      <p><b>Rate policies</b> (<code>behavior.*.policies</code>): the speed limit on top of the wish —
+        e.g. +2 pods or +50% per 60s going up, −1 pod or −25% going down. <code>selectPolicy: Max</code>
+        picks the larger change, <code>Min</code> the smaller; <code>min/maxReplicas</code> clamp the result.</p>
+      <p><b>Fleet A — External/Value:</b> <code>desired = ceil(pods × wait ÷ aim)</code>.
+        Queue wait is ONE global number, identical on every exporter — HPA multiplies it by the pod
+        count, so the recommendation explodes (wait 18s × 5 pods = “want 93”).</p>
+      <p><b>Fleet A — External/AverageValue:</b> <code>desired = ceil(Σ wait ÷ aim)</code> over a
+        per-pod series that doesn't exist — it divides by pod counts that never contributed to the
+        measurement.</p>
+      <p><b>Fleet B — Pods/Utilization:</b> slot fullness is genuinely per-pod, so the math works —
+        its cost is that pod-busyness is blind to how deep the queue is.</p>
+    </div>
+  </details>
+  <div id="mathTip"></div>
+</main>
+<script>
+"use strict";
+"use strict";
+(() => {
+  // ../../packages/hpa-sim/src/fleet.ts
+  var Fleet = class {
+    id;
+    queue = [];
+    pods = [];
+    ux = [];
+    soj = [];
+    /** jobs submitted since last ux tick (instantaneous rate input). */
+    arrSec = 0;
+    rateEMA = 0;
+    sim;
+    rng;
+    podSeq = 0;
+    jobSeq;
+    // shared with the workload generator
+    constructor(sim, id, cfg2, jobSeq) {
+      this.sim = sim;
+      this.rng = sim.rng.stream(`fleet:${id}`);
+      this.id = id;
+      this.cfg = cfg2;
+      this.jobSeq = jobSeq;
+    }
+    cfg;
+    emit(kind, payload = null) {
+      this.sim.emit(`${this.id}.${kind}`, payload);
+    }
+    live() {
+      return this.pods.filter((p) => !p.term).length;
+    }
+    get slotsPerPod() {
+      return this.cfg.slotsPerPod;
+    }
+    ready() {
+      return this.pods.filter((p) => !p.term && p.state === "run").length;
+    }
+    /** status.replicas analogue: includes draining pods. */
+    status() {
+      return this.pods.length;
+    }
+    busyOf(p) {
+      return p.state === "run" ? p.slots.reduce((a, s) => a + (s ? 1 : 0), 0) : 0;
+    }
+    receive(job) {
+      this.queue.push(job);
+      this.arrSec++;
+      this.newlyArrived++;
+    }
+    /** arrivals since last call (the "+N arrived" flash on the queue line). */
+    newlyArrived = 0;
+    consumeArrived() {
+      const n = this.newlyArrived;
+      this.newlyArrived = 0;
+      return n;
+    }
+    /**
+     * Spawn n pods. prewarm = "the floor was already running at t=0" (baseline
+     * workers are immediately in run state and polling); scale-up pods pay the
+     * startup delay — that's part of the story when HPA acts.
+     */
+    spawn(n, prewarm = false) {
+      for (let k = 0; k < n; k++) {
+        const p = {
+          id: ++this.podSeq,
+          state: prewarm ? "run" : "start",
+          term: false,
+          born: this.sim.now,
+          slots: new Array(this.cfg.slotsPerPod).fill(null)
+        };
+        this.pods.push(p);
+        this.emit("pod.spawn", { pod: p });
+        if (!prewarm) {
+          this.sim.at(this.sim.now + this.cfg.startup, `${this.id}._ready`, p);
+        } else {
+          this.schedulePoll(p);
+        }
+      }
+    }
+    /** internal event handler (kind `${id}._ready`) */
+    onReady(p) {
+      if (!this.pods.includes(p)) return;
+      p.state = "run";
+      this.emit("pod.ready", { pod: p });
+      this.schedulePoll(p);
+    }
+    terminate(list) {
+      for (const p of list) {
+        p.term = true;
+        this.emit("pod.term", { pod: p });
+        const busy = this.busyOf(p);
+        if (busy === 0 || p.state !== "run") {
+          this.drop(p);
+          continue;
+        }
+        p.graceAt = this.sim.now + this.cfg.grace;
+        this.sim.at(p.graceAt, `${this.id}._grace`, p);
+      }
+    }
+    onGrace(p) {
+      if (!this.pods.includes(p)) return;
+      let n = 0;
+      for (let i = 0; i < p.slots.length; i++) {
+        const s = p.slots[i];
+        if (!s) continue;
+        this.sim.cancel(s.tok);
+        n++;
+        s.job.requeues = (s.job.requeues || 0) + 1;
+        s.job.arrive = this.sim.now;
+        this.queue.push(s.job);
+        this.emit("job.requeue", { job: s.job, pod: p.id });
+        p.slots[i] = null;
+      }
+      this.drop(p);
+      this.emit("pod.kill", { pod: p, requeued: n });
+    }
+    drop(p) {
+      const k = this.pods.indexOf(p);
+      if (k < 0) return;
+      if (p.pollTok) this.sim.cancel(p.pollTok);
+      this.pods.splice(k, 1);
+      this.emit("pod.drop", { pod: p });
+    }
+    queuePoll(p, delay) {
+      if (p.pollTok) this.sim.cancel(p.pollTok);
+      const payload = { p };
+      const tok = this.sim.at(this.sim.now + delay, `${this.id}._poll`, payload);
+      payload.tok = tok;
+      p.pollTok = tok;
+    }
+    schedulePoll(p) {
+      this.queuePoll(p, Math.max(1, Math.round(this.cfg.poll * (0.5 + this.rng.float()))));
+    }
+    /**
+     * Engine handler bound once (World registers it). The engine delivers the
+     * payload BY REFERENCE (the very object passed to `at`), and queuePoll
+     * back-fills `payload.tok` after the token exists — that is how handlers
+     * receive their cancellation token.
+     */
+    onPoll = (payload) => {
+      const { p, tok } = payload;
+      if (tok !== p.pollTok || !this.pods.includes(p) || p.term || p.state !== "run") return;
+      let free = 0;
+      for (const s of p.slots) if (!s) free++;
+      if (free && this.queue.length) {
+        const job = this.queue.shift();
+        let i = 0;
+        while (p.slots[i]) i++;
+        const end = this.sim.now + job.dur;
+        const payload2 = { p, i };
+        const tok2 = this.sim.at(end, `${this.id}._complete`, payload2);
+        payload2.tok = tok2;
+        const slot = { job, end, tok: tok2 };
+        p.slots[i] = slot;
+      }
+      this.schedulePoll(p);
+    };
+    onComplete = (payload) => {
+      const { p, i, tok } = payload;
+      const slot = p.slots[i];
+      if (!slot || slot.tok !== tok) return;
+      this.soj.push({ t: this.sim.now, v: this.sim.now - slot.job.arrive0 });
+      if (this.soj.length > 500) this.soj.splice(0, 250);
+      p.slots[i] = null;
+      this.emit("job.complete", { job: slot.job, pod: p.id });
+      if (p.term && p.slots.every((x) => !x)) {
+        this.drop(p);
+        return;
+      }
+      if (this.queue.length && !p.term && p.state === "run") {
+        this.queuePoll(p, 0);
+      }
+    };
+    /** End-user sample (kind `${id}.ux`, 1 Hz): reads the queue DIRECTLY —
+     *  what a dashboard polling the queue backend itself would show. */
+    uxSample() {
+      let old = 0;
+      for (const j of this.queue) old = Math.max(old, this.sim.now - j.arrive0);
+      const win = this.soj.filter((s2) => s2.t >= this.sim.now - 120).map((s2) => s2.v).sort((a, b) => a - b);
+      const p95 = win.length ? win[Math.min(win.length - 1, Math.floor(0.95 * win.length))] ?? 0 : 0;
+      this.rateEMA += (this.arrSec * 60 - this.rateEMA) * 0.06;
+      this.arrSec = 0;
+      const s = { t: this.sim.now, old, p95, rate: this.rateEMA };
+      this.ux.push(s);
+      while (this.ux.length > 2 && this.ux[0].t < this.sim.now - 7200) this.ux.shift();
+      this.emit("ux", s);
+    }
+    /** next lognormal service time; sigma<=0 → deterministic dur=median. */
+    drawDur(median, sigma) {
+      if (sigma <= 0) return median;
+      return Math.max(1, Math.round(this.rng.lognormal(median, sigma)));
+    }
+    nextJobId() {
+      return ++this.jobSeq.n;
+    }
+    on(kind, h) {
+      return this.sim.on(`${this.id}.${kind}`, h);
+    }
+  };
+
+  // ../../packages/des-core/src/heap.ts
+  var MinHeap = class {
+    items = [];
+    get size() {
+      return this.items.length;
+    }
+    push(item) {
+      const a = this.items;
+      a.push(item);
+      let i = a.length - 1;
+      while (i > 0) {
+        const parent = i - 1 >> 1;
+        if (this.lessThan(a[i], a[parent])) {
+          const tmp = a[i];
+          a[i] = a[parent];
+          a[parent] = tmp;
+          i = parent;
+        } else break;
+      }
+    }
+    peek() {
+      return this.items[0];
+    }
+    pop() {
+      const a = this.items;
+      const top = a[0];
+      const last = a.pop();
+      if (a.length > 0 && last !== void 0) {
+        a[0] = last;
+        let i = 0;
+        for (; ; ) {
+          const l = 2 * i + 1, r = 2 * i + 2;
+          let small = i;
+          if (l < a.length && this.lessThan(a[l], a[small])) small = l;
+          if (r < a.length && this.lessThan(a[r], a[small])) small = r;
+          if (small === i) break;
+          const tmp = a[i];
+          a[i] = a[small];
+          a[small] = tmp;
+          i = small;
+        }
+      }
+      return top;
+    }
+    /** Stable total order: time first, insertion sequence second. */
+    lessThan(a, b) {
+      return a.time !== b.time ? a.time < b.time : a.seq < b.seq;
+    }
+  };
+
+  // ../../packages/des-core/src/rng.ts
+  function sfc32(seed) {
+    let a = 0 | seed;
+    let b = a = a + 2654435769 | 0;
+    let c = a = a + 2654435769 | 0;
+    let d = a = a + 2654435769 | 0;
+    const sm = () => {
+      a = a + 2654435769 | 0;
+      let t = a;
+      t = Math.imul(t ^ t >>> 15, 1 | t);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return t ^ t >>> 14 | 0;
+    };
+    a = sm();
+    b = sm();
+    c = sm();
+    d = sm();
+    return function() {
+      let t = a + b | 0;
+      a = b ^ b >>> 9;
+      b = c + (c << 3) | 0;
+      c = c << 21 | c >>> 11;
+      d = d + 1 | 0;
+      t = t + d | 0;
+      c = c + t | 0;
+      return (t >>> 0) / 4294967296;
+    };
+  }
+  function hashKey(key) {
+    let h = 2166136261;
+    for (let i = 0; i < key.length; i++) {
+      h ^= key.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h | 0;
+  }
+  var Rng = class _Rng {
+    next;
+    /** seed this stream derives from (root = sim seed); children inherit it so
+     * every named stream is a pure function of (sim seed, name). */
+    base;
+    constructor(next, base) {
+      this.next = next;
+      this.base = base;
+    }
+    /**
+     * Derive an independent child stream: stable across construction order and
+     * parent consumption (keyed by name), but dependent on the sim seed — two
+     * seeds must NOT produce identical subsystems.
+     */
+    stream(key) {
+      return new _Rng(sfc32(hashKey(key) ^ this.base + 2654435769), this.base);
+    }
+    /** Uniform in [0, 1). */
+    float() {
+      return this.next();
+    }
+    /** Uniform integer in [0, n). */
+    int(n) {
+      return Math.floor(this.next() * n);
+    }
+    /**
+     * Exponential(mean) via inverse CDF. -ln(1-u): u in [0,1) so 1-u in (0,1],
+     * never log(0). Math.log accuracy is identical across V8/SpiderMonkey/JSC
+     * to the last bit in practice for our purposes; golden tests are generated
+     * on this engine and pinned as data, so intra-run determinism holds even
+     * if another engine differed in the final ULP.
+     */
+    exponential(mean) {
+      const u = 1 - this.next();
+      return -mean * Math.log(u);
+    }
+    /** Standard normal via Box–Muller. */
+    normal() {
+      const u1 = 1 - this.next();
+      const u2 = this.next();
+      return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    }
+    /** Lognormal with median `median` and multiplicative spread `sigma`. */
+    lognormal(median, sigma) {
+      return median * Math.exp(sigma * this.normal());
+    }
+    /** Poisson via Knuth (fine for our small rates). */
+    poisson(lambda) {
+      if (lambda <= 0) return 0;
+      const L = Math.exp(-lambda);
+      let k = 0;
+      let p = 1;
+      do {
+        k++;
+        p *= this.next();
+      } while (p > L);
+      return k - 1;
+    }
+  };
+
+  // ../../packages/des-core/src/engine.ts
+  var INTERNAL = "\0";
+  function wait(ticks) {
+    if (!Number.isInteger(ticks) || ticks < 0)
+      throw new Error(`wait: ticks must be a non-negative integer, got ${ticks}`);
+    return { op: "wait", ticks };
+  }
+  var Sim = class {
+    rng;
+    _now = 0;
+    seq = 0;
+    nextId = 1;
+    heap = new MinHeap();
+    handlers = /* @__PURE__ */ new Map();
+    /** external one-shot subscriptions: kind -> list of (id, resume) waiters */
+    waiters = /* @__PURE__ */ new Map();
+    processes = /* @__PURE__ */ new Map();
+    procTimers = /* @__PURE__ */ new Map();
+    trace = [];
+    tracing;
+    constructor(seed, opts = {}) {
+      this.rng = new Rng(sfc32(seed), seed | 0);
+      this.tracing = opts.trace ?? false;
+    }
+    /** Current virtual time (integer tick). Never wall-clock. */
+    get now() {
+      return this._now;
+    }
+    get pendingEvents() {
+      return this.heap.size;
+    }
+    /* ---------- scheduling ---------- */
+    /** Schedule an external (bus-visible) event at absolute `time`. */
+    at(time, kind, payload = null) {
+      if (kind.includes(INTERNAL)) throw new Error("kind must not contain NUL (reserved namespace)");
+      return this.pushEvent(time, kind, payload);
+    }
+    /**
+     * Queue `kind` at the current tick. It fires in (time, seq) order — after
+     * anything already queued at `now` — preserving the total-order invariant.
+     * Call `flush()` to drain the current tick immediately.
+     */
+    emit(kind, payload = null) {
+      if (kind.includes(INTERNAL)) throw new Error("kind must not contain NUL (reserved namespace)");
+      this.pushEvent(this._now, kind, payload);
+    }
+    /** Process every event still queued at the current tick. */
+    flush() {
+      let n = 0;
+      for (; ; ) {
+        const top = this.heap.peek();
+        if (!top || top.time > this._now) return n;
+        this.step();
+        n++;
+      }
+    }
+    /**
+     * Recurring external event: fires at first `start`, then every `period`.
+     * Implemented as a hidden process so cancellation is a handle method.
+     */
+    every(period, kind, payload = null, start) {
+      if (!Number.isInteger(period) || period <= 0)
+        throw new Error(`every: period must be a positive integer, got ${period}`);
+      const self = this;
+      function* loop() {
+        const first = start === void 0 ? self.now + period : Math.max(self.now, start);
+        yield wait(first - self.now);
+        for (; ; ) {
+          self.emit(kind, payload);
+          yield wait(period);
+        }
+      }
+      return this.spawn(loop());
+    }
+    /** Register a generator process; it starts on the next microtask-free pump. */
+    spawn(gen) {
+      const id = this.nextId++;
+      this.processes.set(id, gen);
+      this.resume(id, void 0);
+      return { id, cancel: () => this.cancelProcess(id) };
+    }
+    cancel(token) {
+      this.deadTokens.add(token.id);
+    }
+    deadTokens = /* @__PURE__ */ new Set();
+    cancelProcess(id) {
+      this.processes.delete(id);
+      const t = this.procTimers.get(id);
+      if (t) {
+        this.cancel(t);
+        this.procTimers.delete(id);
+      }
+      for (const list of this.waiters.values()) {
+        const i = list.findIndex((w) => w.id === id);
+        if (i >= 0) list.splice(i, 1);
+      }
+    }
+    /* ---------- bus ---------- */
+    on(kind, handler) {
+      if (kind.startsWith(INTERNAL)) throw new Error("internal kind namespace is reserved");
+      const list = this.handlers.get(kind) ?? [];
+      list.push(handler);
+      this.handlers.set(kind, list);
+      return () => {
+        const i = list.indexOf(handler);
+        if (i >= 0) list.splice(i, 1);
+      };
+    }
+    /* ---------- run loop ---------- */
+    /** Process exactly one live event. Returns false when the sim is exhausted. */
+    step() {
+      for (; ; ) {
+        const top = this.heap.peek();
+        if (!top) return false;
+        this.heap.pop();
+        const ev = top.payload;
+        if (ev.dead || this.deadTokens.has(top.seq)) continue;
+        this.deliver(ev);
+        return true;
+      }
+    }
+    /** Run until `untilTime` (exclusive of events strictly after it) or drained. */
+    run(untilTime = Infinity) {
+      let n = 0;
+      for (; ; ) {
+        const top = this.heap.peek();
+        if (!top || top.time > untilTime) break;
+        this.step();
+        n++;
+      }
+      return n;
+    }
+    /** Run draining everything scheduled, with a safety cap. */
+    drain(maxEvents = 1e7) {
+      let n = 0;
+      while (n < maxEvents && this.step()) n++;
+      if (n >= maxEvents) throw new Error(`drain: exceeded ${maxEvents} events \u2014 runaway?`);
+      return n;
+    }
+    /* ---------- internals ---------- */
+    pushEvent(time, kind, payload) {
+      if (!Number.isInteger(time) || time < this._now)
+        throw new Error(`pushEvent: time ${time} must be an integer >= now (${this._now})`);
+      const id = this.nextId++;
+      const ev = { time, seq: id, kind, payload };
+      this.heap.push({ time, seq: id, payload: ev });
+      return { id };
+    }
+    /** Deliver a live event: trace, wake internal machinery, then the bus. */
+    deliver(ev) {
+      this._now = ev.time;
+      if (this.tracing)
+        this.trace.push(ev.kind.startsWith(INTERNAL) ? { t: ev.time, seq: ev.seq, kind: INTERNAL } : { t: ev.time, seq: ev.seq, kind: ev.kind, payload: ev.payload });
+      const list = this.waiters.get(ev.kind);
+      if (list && list.length) {
+        const firing = list.splice(0, list.length);
+        for (const w of firing) {
+          if (this.processes.has(w.id)) this.resume(w.id, ev);
+        }
+      }
+      if (!ev.kind.startsWith(INTERNAL)) {
+        const hs = this.handlers.get(ev.kind);
+        if (hs) for (const h of hs.slice()) h(ev.payload, ev.time);
+      }
+    }
+    /** Start or resume a process until it yields or finishes. */
+    resume(id, value) {
+      const gen = this.processes.get(id);
+      if (!gen) return;
+      let r;
+      try {
+        r = gen.next(value);
+      } catch (e) {
+        this.processes.delete(id);
+        throw e;
+      }
+      if (r.done) {
+        this.processes.delete(id);
+        this.procTimers.delete(id);
+        return;
+      }
+      const cmd = r.value;
+      if (cmd.op === "wait") {
+        const tKind = `${INTERNAL}timer:${id}`;
+        const t = this.pushEvent(this._now + cmd.ticks, tKind, id);
+        this.procTimers.set(id, t);
+        const list = this.waiters.get(tKind) ?? [];
+        list.push({ id, resume: () => this.resume(id, void 0) });
+        this.waiters.set(tKind, list);
+      } else if (cmd.op === "until") {
+        const list = this.waiters.get(cmd.kind) ?? [];
+        list.push({ id, resume: (e) => this.resume(id, e) });
+        this.waiters.set(cmd.kind, list);
+      }
+    }
+  };
+
+  // ../../packages/hpa-sim/src/workload.ts
+  function rateFactor(pattern, t) {
+    switch (pattern) {
+      case "steady":
+        return 1;
+      case "ramp":
+        return t < 420 ? 0.15 + t / 420 * 0.85 : 1;
+      case "diurnal":
+        return 0.25 + 0.75 * Math.max(0, Math.sin(2 * Math.PI * (t - 240) / 900)) ** 1.5;
+      case "idleburst":
+        return t % 720 < 420 ? 0.05 : 2.4;
+    }
+  }
+  var JOB_ARRIVE = "job.arrive";
+  function startWorkload(sim, cfg2) {
+    const rng = sim.rng.stream("workload");
+    const peak = cfg2.rate * 2.5;
+    let jobSeq = 0;
+    const draw = (t) => ({
+      id: ++jobSeq,
+      arrive0: t,
+      arrive: t,
+      dur: Math.max(1, Math.round(cfg2.sigma <= 0 ? cfg2.dur : rng.lognormal(cfg2.dur, cfg2.sigma))),
+      requeues: 0
+    });
+    function* chain() {
+      let cursor = sim.now;
+      for (; ; ) {
+        let accepted = false;
+        for (let guard = 0; guard < 1e6 && !accepted; guard++) {
+          cursor += -60 / peak * Math.log(1 - rng.float());
+          accepted = rng.float() < rateFactor(cfg2.pattern, cursor) / 2.5;
+        }
+        const tick = Math.max(sim.now, Math.ceil(cursor));
+        yield wait(tick - sim.now);
+        sim.emit(JOB_ARRIVE, draw(sim.now));
+      }
+    }
+    sim.spawn(chain());
+    return {
+      burst: (n) => {
+        function* b() {
+          for (let k = 0; k < n; k++) {
+            sim.emit(JOB_ARRIVE, draw(sim.now));
+            if (k < n - 1) yield wait(1);
+          }
+        }
+        sim.spawn(b());
+      }
+    };
+  }
+
+  // ../../packages/hpa-sim/src/policies.ts
+  var INT32_MAX = 2147483647;
+  var INT32_MIN = -2147483648;
+  function ceilToInt32(f) {
+    const c = Math.ceil(f);
+    if (c > INT32_MAX) return INT32_MAX;
+    if (c < INT32_MIN) return INT32_MIN;
+    return c === 0 ? 0 : c;
+  }
+  function getReplicasChangePerPeriod(periodSeconds, now, events) {
+    const cutoff = now - periodSeconds;
+    let replicas = 0;
+    for (const rec of events) if (rec.t > cutoff) replicas += rec.replicaChange;
+    return replicas;
+  }
+  function getLongestPolicyPeriod(side) {
+    let longest = 0;
+    if (side.policies) {
+      for (const p of side.policies) if (p.periodSeconds > longest) longest = p.periodSeconds;
+    }
+    return longest;
+  }
+  function markScaleEventsOutdated(now, longestPolicyPeriod, events) {
+    const cutoff = now - longestPolicyPeriod;
+    for (const e of events) if (e.t < cutoff) e.outdated = true;
+  }
+  function calculateScaleUpLimitWithScalingRules(currentReplicas, now, upEvents, downEvents, rules) {
+    if (rules.selectPolicy === "Disabled")
+      return { limit: currentReplicas, sentinel: false, policies: [] };
+    const minChange = rules.selectPolicy === "Min";
+    let result = minChange ? INT32_MAX : INT32_MIN;
+    let sentinel = true;
+    let policySet;
+    const detail = [];
+    for (const policy of rules.policies ?? []) {
+      const added = getReplicasChangePerPeriod(policy.periodSeconds, now, upEvents);
+      const deleted = getReplicasChangePerPeriod(policy.periodSeconds, now, downEvents);
+      const periodStart = currentReplicas - added + deleted;
+      const proposed = policy.type === "Pods" ? periodStart + policy.value : ceilToInt32(periodStart * (1 + policy.value / 100));
+      const better = minChange ? proposed < result : proposed > result;
+      if (better) {
+        result = proposed;
+        policySet = policy;
+      }
+      sentinel = false;
+      detail.push({ p: policy, addedInPeriod: added, deletedInPeriod: deleted, periodStart, proposed });
+    }
+    return { limit: result, sentinel, policies: detail, policySet };
+  }
+  function calculateScaleDownLimitWithBehaviors(currentReplicas, now, upEvents, downEvents, rules) {
+    if (rules.selectPolicy === "Disabled")
+      return { limit: currentReplicas, sentinel: false, policies: [] };
+    const minChange = rules.selectPolicy === "Min";
+    let result = minChange ? INT32_MIN : INT32_MAX;
+    let sentinel = true;
+    let policySet;
+    const detail = [];
+    for (const policy of rules.policies ?? []) {
+      const added = getReplicasChangePerPeriod(policy.periodSeconds, now, upEvents);
+      const deleted = getReplicasChangePerPeriod(policy.periodSeconds, now, downEvents);
+      const periodStart = currentReplicas - added + deleted;
+      const proposed = policy.type === "Pods" ? periodStart - policy.value : Math.trunc(periodStart * (1 - policy.value / 100));
+      const better = minChange ? proposed > result : proposed < result;
+      if (better) {
+        result = proposed;
+        policySet = policy;
+      }
+      sentinel = false;
+      detail.push({ p: policy, addedInPeriod: added, deletedInPeriod: deleted, periodStart, proposed });
+    }
+    return { limit: result, sentinel, policies: detail, policySet };
+  }
+  function convertDesiredReplicasWithBehaviorRate(args) {
+    const { desiredReplicas: desired, currentReplicas: current } = args;
+    if (desired > current) {
+      const upDetail = calculateScaleUpLimitWithScalingRules(current, args.now, args.upEvents, args.downEvents, args.up);
+      let scaleUpLimit = upDetail.limit;
+      if (scaleUpLimit < current) scaleUpLimit = current;
+      let maximumAllowedReplicas = args.maxReplicas;
+      let reason, message;
+      if (maximumAllowedReplicas > scaleUpLimit) {
+        maximumAllowedReplicas = scaleUpLimit;
+        reason = "ScaleUpLimit";
+        message = "the desired replica count is increasing faster than the maximum scale rate";
+      } else {
+        reason = "TooManyReplicas";
+        message = "the desired replica count is more than the maximum replica count";
+      }
+      if (desired > maximumAllowedReplicas)
+        return { desired: maximumAllowedReplicas, reason, message, upDetail, ceiling: maximumAllowedReplicas, floor: args.minReplicas };
+      return { desired, reason: "DesiredWithinRange", message: "the desired count is within the acceptable range", upDetail, ceiling: maximumAllowedReplicas, floor: args.minReplicas };
+    } else if (desired < current) {
+      const downDetail = calculateScaleDownLimitWithBehaviors(current, args.now, args.upEvents, args.downEvents, args.down);
+      let scaleDownLimit = downDetail.limit;
+      if (scaleDownLimit > current) scaleDownLimit = current;
+      let minimumAllowedReplicas = args.minReplicas;
+      let reason, message;
+      if (minimumAllowedReplicas < scaleDownLimit) {
+        minimumAllowedReplicas = scaleDownLimit;
+        reason = "ScaleDownLimit";
+        message = "the desired replica count is decreasing faster than the maximum scale rate";
+      } else {
+        reason = "TooFewReplicas";
+        message = "the desired replica count is less than the minimum replica count";
+      }
+      if (desired < minimumAllowedReplicas)
+        return { desired: minimumAllowedReplicas, reason, message, downDetail, floor: minimumAllowedReplicas, ceiling: args.maxReplicas };
+      return { desired, reason: "DesiredWithinRange", message: "the desired count is within the acceptable range", downDetail, floor: minimumAllowedReplicas, ceiling: args.maxReplicas };
+    }
+    return { desired, reason: "DesiredWithinRange", message: "the desired count is within the acceptable range" };
+  }
+  function calculateScaleUpLimitLegacy(currentReplicas) {
+    return Math.max(Math.ceil(currentReplicas * 2), 4);
+  }
+  function convertDesiredReplicasWithRules(desiredReplicas, currentReplicas, minReplicas, maxReplicas) {
+    const minimumAllowedReplicas = minReplicas;
+    const scaleUpLimit = calculateScaleUpLimitLegacy(currentReplicas);
+    let maximumAllowedReplicas, reason, message;
+    if (maxReplicas > scaleUpLimit) {
+      maximumAllowedReplicas = scaleUpLimit;
+      reason = "ScaleUpLimit";
+      message = "the desired replica count is increasing faster than the maximum scale rate";
+    } else {
+      maximumAllowedReplicas = maxReplicas;
+      reason = "TooManyReplicas";
+      message = "the desired replica count is more than the maximum replica count";
+    }
+    if (desiredReplicas < minimumAllowedReplicas)
+      return { desired: minimumAllowedReplicas, reason: "TooFewReplicas", message: "the desired replica count is less than the minimum replica count" };
+    if (desiredReplicas > maximumAllowedReplicas)
+      return { desired: maximumAllowedReplicas, reason, message };
+    return { desired: desiredReplicas, reason: "DesiredWithinRange", message: "the desired count is within the acceptable range" };
+  }
+
+  // ../../packages/hpa-sim/src/replicaCalculator.ts
+  function isWithin(t, usageRatio) {
+    return 1 - t.scaleDown <= usageRatio && usageRatio <= 1 + t.scaleUp;
+  }
+  function getResourceUtilizationRatio(perPod, targetUtilization) {
+    let metricsTotal = 0;
+    let requestsTotal = 0;
+    let numEntries = 0;
+    for (const m of perPod) {
+      if (m.request === void 0) continue;
+      metricsTotal += m.value;
+      requestsTotal += m.request ?? 0;
+      numEntries++;
+    }
+    if (requestsTotal === 0)
+      throw new Error("no metrics returned matched known pods");
+    let percent = Math.trunc(metricsTotal * 100 / requestsTotal);
+    if (percent > INT32_MAX) percent = INT32_MAX;
+    else if (percent < -INT32_MAX) percent = -INT32_MAX;
+    const rawAvg = Math.trunc(metricsTotal / numEntries);
+    return { ratio: percent / targetUtilization, percent, rawAvg, measured: numEntries };
+  }
+  function proposeUtilization(specReplicas, targetUtilization, perPod, tol) {
+    const { ratio, percent } = getResourceUtilizationRatio(perPod, targetUtilization);
+    const readyPods = perPod.filter((p) => p.ready).length;
+    if (specReplicas !== 0) {
+      if (isWithin(tol, ratio)) {
+        return {
+          replicaCount: specReplicas,
+          ratio,
+          current: percent,
+          withinTolerance: true,
+          detail: { kind: "Utilization", totalUsage: percent, target: targetUtilization, readyPods, statusReplicas: specReplicas, percentInt: percent }
+        };
+      }
+      return {
+        replicaCount: ceilToInt32(ratio * readyPods),
+        ratio,
+        current: percent,
+        withinTolerance: false,
+        detail: { kind: "Utilization", totalUsage: percent, target: targetUtilization, readyPods, statusReplicas: specReplicas, percentInt: percent }
+      };
+    }
+    return {
+      replicaCount: ceilToInt32(ratio),
+      ratio,
+      current: percent,
+      withinTolerance: false,
+      detail: { kind: "Utilization", totalUsage: percent, target: targetUtilization, readyPods, statusReplicas: specReplicas, percentInt: percent }
+    };
+  }
+  function proposeValue(specReplicas, target, sum, readyPods, tol) {
+    const ratio = sum / target;
+    if (specReplicas !== 0) {
+      if (isWithin(tol, ratio))
+        return {
+          replicaCount: specReplicas,
+          ratio,
+          current: sum,
+          withinTolerance: true,
+          detail: { kind: "Value", totalUsage: sum, target, readyPods, statusReplicas: specReplicas }
+        };
+      return {
+        replicaCount: ceilToInt32(ratio * readyPods),
+        ratio,
+        current: sum,
+        withinTolerance: false,
+        detail: { kind: "Value", totalUsage: sum, target, readyPods, statusReplicas: specReplicas }
+      };
+    }
+    return {
+      replicaCount: ceilToInt32(ratio),
+      ratio,
+      current: sum,
+      withinTolerance: false,
+      detail: { kind: "Value", totalUsage: sum, target, readyPods, statusReplicas: specReplicas }
+    };
+  }
+  function proposeAverageValue(statusReplicas, targetPerPod, totalUsage, tol) {
+    if (statusReplicas !== 0) {
+      const ratio2 = totalUsage / (targetPerPod * statusReplicas);
+      if (isWithin(tol, ratio2))
+        return {
+          replicaCount: statusReplicas,
+          ratio: ratio2,
+          current: totalUsage,
+          withinTolerance: true,
+          detail: { kind: "AverageValue", totalUsage, target: targetPerPod, readyPods: statusReplicas, statusReplicas }
+        };
+      return {
+        replicaCount: ceilToInt32(totalUsage / targetPerPod),
+        ratio: ratio2,
+        current: totalUsage,
+        withinTolerance: false,
+        detail: { kind: "AverageValue", totalUsage, target: targetPerPod, readyPods: statusReplicas, statusReplicas }
+      };
+    }
+    const ratio = totalUsage / targetPerPod;
+    return {
+      replicaCount: ceilToInt32(totalUsage / targetPerPod),
+      ratio,
+      current: totalUsage,
+      withinTolerance: false,
+      detail: { kind: "AverageValue", totalUsage, target: targetPerPod, readyPods: 0, statusReplicas }
+    };
+  }
+  function propose(target, args) {
+    switch (target.type) {
+      case "Value":
+        return proposeValue(args.specReplicas, target.targetValue, args.sum, args.readyPods, args.tol);
+      case "AverageValue":
+        return proposeAverageValue(args.statusReplicas, target.targetValue, args.sum, args.tol);
+      case "Utilization":
+        return proposeUtilization(args.specReplicas, target.averageUtilization, args.perPod, args.tol);
+    }
+  }
+
+  // ../../packages/hpa-sim/src/stabilize.ts
+  var RecommendationCache = class {
+    recs = [];
+    /**
+     * recordInitialRecommendation (horizontal.go:804–811): seeded with the
+     * current count exactly once per HPA key, so a freshly created HPA has a
+     * memory of where it started.
+     */
+    seedInitial(t, currentReplicas) {
+      if (this.recs.length === 0) this.recs.push({ t, recommendation: currentReplicas });
+    }
+    /** Behaviors path (1256–1315). */
+    stabilizeWithBehaviors(now, currentReplicas, freshDesired, upWindow, downWindow) {
+      const upCutoff = now - upWindow;
+      const downCutoff = now - downWindow;
+      let upRecommendation = freshDesired;
+      let downRecommendation = freshDesired;
+      let foundOldSample = false;
+      let oldSampleIndex = 0;
+      const pool = [];
+      for (let i = 0; i < this.recs.length; i++) {
+        const rec = this.recs[i];
+        if (rec.t > upCutoff) upRecommendation = Math.min(rec.recommendation, upRecommendation);
+        if (rec.t > downCutoff) downRecommendation = Math.max(rec.recommendation, downRecommendation);
+        if (rec.t < upCutoff && rec.t < downCutoff) {
+          foundOldSample = true;
+          oldSampleIndex = i;
+        }
+        if (rec.t > upCutoff || rec.t > downCutoff) pool.push(rec);
+      }
+      let recommendation = currentReplicas;
+      if (recommendation < upRecommendation) recommendation = upRecommendation;
+      if (recommendation > downRecommendation) recommendation = downRecommendation;
+      if (foundOldSample) this.recs[oldSampleIndex] = { t: now, recommendation: freshDesired };
+      else this.recs.push({ t: now, recommendation: freshDesired });
+      return { stabilized: recommendation, upBound: upRecommendation, downBound: downRecommendation, pool };
+    }
+    /**
+     * Legacy path (stabilizeRecommendation, 1085–1109): max over
+     * downscaleStabilisationWindow only — no up-window floor at all.
+     */
+    stabilizeLegacy(now, freshDesired, downWindow) {
+      const cutoff = now - downWindow;
+      let maxRecommendation = freshDesired;
+      let foundOldSample = false;
+      let oldSampleIndex = 0;
+      const pool = [];
+      for (let i = 0; i < this.recs.length; i++) {
+        const rec = this.recs[i];
+        if (rec.t < cutoff) {
+          foundOldSample = true;
+          oldSampleIndex = i;
+        } else if (rec.recommendation > maxRecommendation) maxRecommendation = rec.recommendation;
+        if (rec.t >= cutoff) pool.push(rec);
+      }
+      if (foundOldSample) this.recs[oldSampleIndex] = { t: now, recommendation: freshDesired };
+      else this.recs.push({ t: now, recommendation: freshDesired });
+      return { stabilized: maxRecommendation, pool };
+    }
+    /** Test/debug view. */
+    snapshot() {
+      return [...this.recs];
+    }
+  };
+
+  // ../../packages/hpa-sim/src/defaults.ts
+  var DEFAULT_FLAGS = {
+    downscaleStabilizationWindow: 300,
+    tolerance: 0.1,
+    syncPeriod: 15
+  };
+  var scaleUpLimitPercent = 100;
+  var scaleUpLimitMinimumPods = 4;
+  var scaleUpPeriod = 15;
+  var scaleDownPeriod = 15;
+  var scaleDownLimitPercent = 100;
+  function defaultScaleUp() {
+    return {
+      stabilizationWindowSeconds: 0,
+      selectPolicy: "Max",
+      policies: [
+        { type: "Pods", value: scaleUpLimitMinimumPods, periodSeconds: scaleUpPeriod },
+        { type: "Percent", value: scaleUpLimitPercent, periodSeconds: scaleUpPeriod }
+      ]
+    };
+  }
+  function defaultScaleDown() {
+    return {
+      stabilizationWindowSeconds: null,
+      selectPolicy: "Max",
+      policies: [
+        { type: "Percent", value: scaleDownLimitPercent, periodSeconds: scaleDownPeriod }
+      ]
+    };
+  }
+  function copyRules(from, to) {
+    if (!from) return to;
+    if (from.selectPolicy !== void 0) to.selectPolicy = from.selectPolicy;
+    if (from.stabilizationWindowSeconds !== void 0)
+      to.stabilizationWindowSeconds = from.stabilizationWindowSeconds;
+    if (from.policies !== void 0) to.policies = from.policies;
+    return to;
+  }
+  function defaultBehavior(user) {
+    if (user === null) return null;
+    return {
+      up: copyRules(user.up, defaultScaleUp()),
+      down: copyRules(user.down, defaultScaleDown())
+    };
+  }
+  function apiDefaultHpa(user) {
+    return {
+      minReplicas: user.spec.minReplicas ?? 1,
+      // SetDefaults: nil → 1
+      maxReplicas: user.spec.maxReplicas,
+      behavior: defaultBehavior(user.spec.behavior === void 0 ? null : user.spec.behavior)
+    };
+  }
+  function resolveHpa(defaulted, flags = DEFAULT_FLAGS) {
+    let behavior = null;
+    if (defaulted.behavior !== null) {
+      behavior = {
+        up: defaulted.behavior.up,
+        // up-stab nil-impossible: API default is 0
+        down: {
+          ...defaulted.behavior.down,
+          stabilizationWindowSeconds: defaulted.behavior.down.stabilizationWindowSeconds ?? flags.downscaleStabilizationWindow
+        }
+      };
+    }
+    return {
+      minReplicas: defaulted.minReplicas,
+      maxReplicas: defaulted.maxReplicas,
+      syncPeriodSeconds: flags.syncPeriod,
+      tolerance: flags.tolerance,
+      behavior
+    };
+  }
+
+  // ../../packages/hpa-sim/src/controller.ts
+  var Autoscaler = class {
+    /** status.replicas analogue is passed per-call; HPA's own last target is
+     *  the deployment spec — the caller (world) owns that (it IS fleet.spec). */
+    constructor(cfg2, target, tol) {
+      this.cfg = cfg2;
+      this.target = target;
+      this.tol = tol;
+    }
+    recCache = new RecommendationCache();
+    upEvents = [];
+    downEvents = [];
+    seeded = false;
+    tolerances() {
+      return { scaleDown: this.tol.scaleDown, scaleUp: this.tol.scaleUp };
+    }
+    /**
+     * One reconciliation. `current` = deployment spec.Replicas; the fleet's
+     * deployment reconciler (spawn up to spec) must have run first, as the
+     * RS loop converges continuously in real clusters.
+     */
+    reconcile(now, args) {
+      const { current, status, ready, live, scrape } = args;
+      const { minReplicas: min, maxReplicas: max } = this.cfg;
+      if (!this.seeded) {
+        this.recCache.seedInitial(now, current);
+        this.seeded = true;
+      }
+      const rep = {
+        t: now,
+        current,
+        status,
+        ready,
+        live,
+        scrape,
+        prenorm: 0,
+        desired: current,
+        rescaled: false
+      };
+      let desired = 0;
+      let needsMetricComputation = true;
+      if (current > max) {
+        desired = max;
+        rep.shortCircuit = "above-max";
+        needsMetricComputation = false;
+      } else if (current < min) {
+        desired = min;
+        rep.shortCircuit = "below-min";
+        needsMetricComputation = false;
+      }
+      if (needsMetricComputation) {
+        let proposal;
+        try {
+          proposal = propose(this.target, {
+            specReplicas: current,
+            statusReplicas: status,
+            readyPods: ready,
+            sum: scrape.sum,
+            perPod: scrape.perPod,
+            tol: this.tolerances()
+          });
+        } catch (e) {
+          rep.metricError = e instanceof Error ? e.message : String(e);
+          rep.prenorm = current;
+          rep.desired = current;
+          return rep;
+        }
+        rep.proposal = proposal;
+        desired = proposal.replicaCount;
+        rep.prenorm = desired;
+        if (this.cfg.behavior === null) {
+          desired = this.normalizeLegacy(now, current, desired, rep);
+        } else {
+          desired = this.normalizeWithBehaviors(now, current, desired, min, max, rep);
+        }
+        rep.desired = desired;
+      } else {
+        rep.prenorm = desired;
+        rep.desired = desired;
+      }
+      const rescale = rep.desired !== current;
+      rep.rescaled = rescale;
+      if (rescale) this.storeScaleEvent(now, current, rep.desired);
+      return rep;
+    }
+    // normalizeDesiredReplicas (legacy): stabilize = MAX over the cluster
+    // downscale window; then convertDesiredReplicasWithRules (2×/4 cap + min/max).
+    normalizeLegacy(now, current, prenorm, rep) {
+      const downWindow = 300;
+      const { stabilized, pool } = this.recCache.stabilizeLegacy(now, prenorm, downWindow);
+      rep.stabilized = stabilized;
+      rep.pool = pool;
+      rep.heldBy = stabilized > prenorm ? "down-window" : "none";
+      const r = convertDesiredReplicasWithRules(stabilized, current, this.cfg.minReplicas, this.cfg.maxReplicas);
+      rep.rate = { desired: r.desired, reason: r.reason, message: r.message };
+      return r.desired;
+    }
+    // normalizeDesiredReplicasWithBehaviors (1141–1172):
+    // stabilize FIRST, then rate-limit the stabilized value.
+    normalizeWithBehaviors(now, current, prenorm, min, max, rep) {
+      const beh = this.cfg.behavior;
+      const st = this.recCache.stabilizeWithBehaviors(
+        now,
+        current,
+        prenorm,
+        beh.up.stabilizationWindowSeconds,
+        beh.down.stabilizationWindowSeconds
+      );
+      rep.stabilized = st.stabilized;
+      rep.upBound = st.upBound;
+      rep.downBound = st.downBound;
+      rep.pool = st.pool;
+      rep.heldBy = st.stabilized === prenorm ? "none" : prenorm >= current ? "up-window" : "down-window";
+      const r = convertDesiredReplicasWithBehaviorRate({
+        now,
+        currentReplicas: current,
+        desiredReplicas: st.stabilized,
+        minReplicas: min,
+        maxReplicas: max,
+        up: beh.up,
+        down: beh.down,
+        upEvents: this.upEvents,
+        downEvents: this.downEvents
+      });
+      rep.rate = { desired: r.desired, reason: r.reason, message: r.message, upDetail: r.upDetail, downDetail: r.downDetail, floor: r.floor, ceiling: r.ceiling };
+      return r.desired;
+    }
+    /**
+     * storeScaleEvent (1206–1254). behavior == nil ⇒ nothing is stored (legacy
+     * path never reads the events). Mark-outdated then recycle the LAST
+     * outdated slot found scanning oldest→newest.
+     */
+    storeScaleEvent(now, prevReplicas, newReplicas) {
+      const beh = this.cfg.behavior;
+      if (beh === null) return;
+      const up = newReplicas > prevReplicas;
+      const list = up ? this.upEvents : this.downEvents;
+      const side = up ? beh.up : beh.down;
+      markScaleEventsOutdated(now, getLongestPolicyPeriod(side), list);
+      let oldSampleIndex = -1;
+      for (let i = 0; i < list.length; i++) if (list[i].outdated) oldSampleIndex = i;
+      const ev = { t: now, replicaChange: Math.abs(newReplicas - prevReplicas), outdated: false };
+      if (oldSampleIndex >= 0) list[oldSampleIndex] = ev;
+      else list.push(ev);
+    }
+    /** read-only views for the UI/tests. */
+    get scaleUpEvents() {
+      return this.upEvents;
+    }
+    get scaleDownEvents() {
+      return this.downEvents;
+    }
+    recommendations() {
+      return this.recCache.snapshot();
+    }
+  };
+
+  // ../../packages/hpa-sim/src/world.ts
+  var World = class {
+    sim;
+    fleets = {};
+    scalers = {};
+    workload;
+    cfg;
+    /** HPA's last applied target per fleet (== deployment spec.Replicas). */
+    spec = {};
+    constructor(cfg2) {
+      this.cfg = cfg2;
+      this.sim = new Sim(cfg2.seed, { trace: false });
+      const resolved = resolveHpa(apiDefaultHpa(cfg2.hpa), cfg2.flags ?? DEFAULT_FLAGS);
+      if (cfg2.hpa.syncPeriod) resolved.syncPeriodSeconds = cfg2.hpa.syncPeriod;
+      this.resolved = resolved;
+      const jobSeq = { n: 0 };
+      for (const def of cfg2.fleets) {
+        const f = new Fleet(this.sim, def.id, cfg2.fleet, jobSeq);
+        this.fleets[def.id] = f;
+        this.scalers[def.id] = new Autoscaler(resolved, def.target, {
+          scaleDown: resolved.tolerance,
+          scaleUp: resolved.tolerance
+        });
+        this.spec[def.id] = resolved.minReplicas;
+        f.spawn(resolved.minReplicas, true);
+        this.sim.on(`${def.id}._ready`, (pl) => f.onReady(pl));
+        this.sim.on(`${def.id}._grace`, (pl) => f.onGrace(pl));
+        this.sim.on(`${def.id}._poll`, f.onPoll);
+        this.sim.on(`${def.id}._complete`, f.onComplete);
+      }
+      this.workload = startWorkload(this.sim, cfg2.workload);
+      this.sim.on("job.arrive", (pl, t) => {
+        const src = pl;
+        for (const def of cfg2.fleets) {
+          const j = { ...src };
+          this.fleets[def.id].receive(j);
+          this.fleets[def.id].emit("job.arrive", j);
+        }
+      });
+      for (const def of cfg2.fleets) {
+        const f = this.fleets[def.id];
+        this.sim.every(1, `${def.id}._ux`, null, 1);
+        this.sim.on(`${def.id}._ux`, () => {
+          f.uxSample();
+          f.emit("view.tick", {
+            ux: f.ux[f.ux.length - 1],
+            disp: (def.disp ?? ((fl, n) => def.metric(fl, n).disp))(f, this.sim.now),
+            queueN: f.queue.length,
+            oldest: f.queue.length ? this.sim.now - f.queue[0].arrive : 0,
+            oldest0: f.queue.length ? this.sim.now - f.queue[0].arrive0 : 0,
+            spec: this.spec[def.id],
+            status: f.status(),
+            ready: f.ready(),
+            chips: f.queue.slice(0, 43).map((j) => ({ id: j.id, rq: j.requeues > 0 })),
+            queueTotal: f.queue.length,
+            arrived: f.consumeArrived(),
+            pods: f.pods.map((p) => ({
+              id: p.id,
+              state: p.state,
+              term: p.term,
+              born: p.born,
+              busy: f.busyOf(p),
+              slotsPerPod: f.slotsPerPod,
+              graceAt: p.graceAt ?? null,
+              slots: p.slots.map((s) => s ? { busy: true, rq: s.job.requeues > 0 } : null)
+            }))
+          });
+        });
+        const scrape = () => def.metric(f, this.sim.now);
+        this.scrapers[def.id] = scrape;
+        this.sim.every(resolved.syncPeriodSeconds, `${def.id}._sync`, null, resolved.syncPeriodSeconds);
+        this.sim.on(`${def.id}._sync`, () => this.reconcile(def, f, scrape));
+        this.reconcile(def, f, scrape);
+      }
+    }
+    resolved;
+    scrapers = {};
+    reconcile(def, f, scrape) {
+      if (f.pods.length < this.spec[def.id]) f.spawn(this.spec[def.id] - f.pods.length);
+      const s = scrape();
+      f.emit("metrics.sample", s);
+      const rep = this.scalers[def.id].reconcile(this.sim.now, {
+        current: this.spec[def.id],
+        status: f.status(),
+        ready: f.ready(),
+        live: f.live(),
+        scrape: s
+      });
+      f.emit("hpa.sync", rep);
+      if (rep.rescaled) {
+        const from = this.spec[def.id];
+        const to = rep.desired;
+        this.spec[def.id] = to;
+        if (to > from) {
+          const n = Math.max(0, to - f.pods.length);
+          if (n > 0) f.spawn(n);
+        } else if (to < from) {
+          const live = f.pods.filter((p) => !p.term);
+          const cull = [...live].sort((x, y) => f.busyOf(x) - f.busyOf(y) || x.born - y.born).slice(0, live.length - to);
+          if (cull.length) f.terminate(cull);
+        }
+        f.emit("hpa.rescale", { from, to, report: rep });
+      }
+    }
+    run(untilT = Infinity) {
+      return this.sim.run(untilT);
+    }
+    burst(n) {
+      this.workload.burst(n);
+    }
+  };
+
+  // src/config.ts
+  var defaultCfg = () => ({
+    pattern: "steady",
+    rate: 80,
+    dur: 30,
+    sigma: 0.6,
+    min: 3,
+    max: 12,
+    sync: 30,
+    metWin: 60,
+    tol: 0.1,
+    startup: 5,
+    grace: 30,
+    poll: 1,
+    up: { win: 60, pods: 2, podsPer: 60, pct: 50, pctPer: 60, sel: "Max" },
+    down: { win: 300, pods: 1, podsPer: 60, pct: 25, pctPer: 60, sel: "Min" },
+    aimA: 1,
+    modeA: "value",
+    aimB: 0.7,
+    seed: 1234
+  });
+  function toUserHpa(cfg2) {
+    return {
+      spec: {
+        minReplicas: cfg2.min,
+        maxReplicas: cfg2.max,
+        behavior: {
+          up: {
+            stabilizationWindowSeconds: cfg2.up.win,
+            selectPolicy: cfg2.up.sel,
+            policies: [
+              { type: "Pods", value: cfg2.up.pods, periodSeconds: cfg2.up.podsPer },
+              { type: "Percent", value: cfg2.up.pct, periodSeconds: cfg2.up.pctPer }
+            ]
+          },
+          down: {
+            stabilizationWindowSeconds: cfg2.down.win,
+            selectPolicy: cfg2.down.sel,
+            policies: [
+              { type: "Pods", value: cfg2.down.pods, periodSeconds: cfg2.down.podsPer },
+              { type: "Percent", value: cfg2.down.pct, periodSeconds: cfg2.down.pctPer }
+            ]
+          }
+        }
+      },
+      syncPeriod: cfg2.sync
+    };
+  }
+  var fleetCfg = (cfg2) => ({ slotsPerPod: 10, startup: cfg2.startup, grace: cfg2.grace, poll: Math.max(1, Math.round(cfg2.poll)) });
+  var workloadCfg = (cfg2) => ({ pattern: cfg2.pattern, rate: cfg2.rate, dur: cfg2.dur, sigma: cfg2.sigma });
+
+  // src/store.ts
+  function mkStore(side) {
+    return {
+      side,
+      series: [],
+      ux: [],
+      log: [],
+      maths: /* @__PURE__ */ new Map(),
+      mathSeq: 0,
+      last: null,
+      lastReport: null,
+      lastSyncT: 0
+    };
+  }
+  var fmtT = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+  // src/render.ts
+  var $ = (id) => document.getElementById(id);
+  var cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n);
+  function spark(cv, series, key, col, step, span2, now) {
+    if (!cv) return;
+    const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = 92;
+    if (!w) return;
+    cv.width = w * dpr;
+    cv.height = h * dpr;
+    const c = cv.getContext("2d");
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.clearRect(0, 0, w, h);
+    const t1 = Math.max(span2, now), t0 = t1 - span2;
+    const vis = series.filter((s) => s["t"] >= t0);
+    if (!vis.length) return;
+    const vals = vis.map((s) => s[key]);
+    if (cv.dataset["grey"]) {
+      for (const s of vis) if (Number.isFinite(s[cv.dataset["grey"]])) vals.push(s[cv.dataset["grey"]]);
+    }
+    const dash = cv.dataset["dash"] ? +cv.dataset["dash"] : null;
+    let yMin, yMax;
+    if (cv.dataset["fixed"]) {
+      yMin = +cv.dataset["floor"] || 0;
+      yMax = +cv.dataset["ceil"];
+    } else {
+      yMin = Math.min(...vals, ...dash !== null ? [dash] : [], ...cv.dataset["floor"] ? [+cv.dataset["floor"]] : []);
+      yMax = Math.max(...vals, ...dash !== null ? [dash] : [], ...cv.dataset["ceil"] ? [+cv.dataset["ceil"]] : []);
+    }
+    const minSpan = +cv.dataset["span"] || 0;
+    if (yMax - yMin < minSpan) {
+      const mid = (yMax + yMin) / 2;
+      yMin = mid - minSpan / 2;
+      yMax = mid + minSpan / 2;
+    }
+    if (cv.dataset["fixed"]) {
+      cv.dataset["yMin"] = String(yMin.toFixed(1));
+      cv.dataset["yMax"] = String(yMax.toFixed(1));
+    } else {
+      const pad = (yMax - yMin) * 0.14;
+      yMin = Math.max(0, yMin - pad);
+      yMax += pad;
+      cv.dataset["yMin"] = String(yMin.toFixed(1));
+      cv.dataset["yMax"] = String(yMax.toFixed(1));
+    }
+    const X = (t) => (t - t0) / span2 * w;
+    const Y = (v) => h - 4 - (Math.min(Math.max(v, yMin), yMax) - yMin) / (yMax - yMin) * (h - 10);
+    if (dash !== null) {
+      c.strokeStyle = "#223047";
+      c.setLineDash([3, 3]);
+      c.beginPath();
+      c.moveTo(0, Y(+cv.dataset["dash"]));
+      c.lineTo(w, Y(+cv.dataset["dash"]));
+      c.stroke();
+      c.setLineDash([]);
+    }
+    if (cv.dataset["grey"]) {
+      const gk = cv.dataset["grey"];
+      c.beginPath();
+      let gs = false, gp = 0;
+      for (const s of vis) {
+        if (!Number.isFinite(s[gk]) || !cv.dataset["greyall"] && s[gk] === s["pods"]) continue;
+        const y = Y(s[gk]);
+        gs ? (c.lineTo(X(s["t"]), gp), c.lineTo(X(s["t"]), y)) : (c.moveTo(X(s["t"]), y), gs = true);
+        gp = y;
+      }
+      c.strokeStyle = cv.dataset["greycol"] || "rgba(148,163,184,.55)";
+      c.lineWidth = 1.2;
+      c.stroke();
+    }
+    c.beginPath();
+    let st = false, prev = 0;
+    for (const s of vis) {
+      const y = Y(s[key]);
+      st ? step ? (c.lineTo(X(s["t"]), prev), c.lineTo(X(s["t"]), y)) : c.lineTo(X(s["t"]), y) : (c.moveTo(X(s["t"]), y), st = true);
+      prev = y;
+    }
+    c.strokeStyle = col;
+    c.lineWidth = 1.6;
+    c.stroke();
+    if (cv.dataset["rate"]) {
+      const rk = cv.dataset["rate"];
+      const rr = vis.map((s) => s[rk] || 0).sort((a, b) => a - b);
+      const rp = rr[Math.min(rr.length - 1, Math.floor(0.98 * rr.length))] ?? 0;
+      const rmax = Math.max(10, rp * 1.25);
+      cv.dataset["rMax"] = String(rmax.toFixed(0));
+      c.beginPath();
+      let rs = false;
+      for (const s of vis) {
+        const y = h - 4 - Math.min(1, (s[rk] || 0) / rmax) * (h - 10);
+        rs ? c.lineTo(X(s["t"]), y) : (c.moveTo(X(s["t"]), y), rs = true);
+      }
+      c.strokeStyle = "rgba(91,157,255,.8)";
+      c.lineWidth = 1.3;
+      c.stroke();
+    }
+  }
+  function gauge(side, disp, aim, tol, isA) {
+    const ratio = disp / aim;
+    const dom = isA ? 3 : 1 / aim;
+    const lo = (1 - tol) / dom * 100, hi = (1 + tol) / dom * 100;
+    const tick = 1 / dom * 100;
+    const el = $(`gf${side}`);
+    el.style.width = Math.min(100, ratio / dom * 100).toFixed(1) + "%";
+    el.classList.toggle("hot", ratio >= 1 + tol);
+    el.classList.toggle("cold", ratio <= 1 - tol);
+    $(`gt${side}`).style.left = tick.toFixed(1) + "%";
+    $(`gz${side}n`).style.right = (100 - lo).toFixed(1) + "%";
+    $(`gz${side}h`).style.left = lo.toFixed(1) + "%";
+    $(`gz${side}h`).style.width = (hi - lo).toFixed(1) + "%";
+    $(`gz${side}u`).style.left = hi.toFixed(1) + "%";
+    $(`gs${side}`).innerHTML = `<i style="left:${(lo / 2).toFixed(1)}%">scale down</i><i style="left:${((lo + hi) / 2).toFixed(1)}%">deadband \xB1${Math.round(tol * 100)}%</i><i style="left:${((100 + hi) / 2).toFixed(1)}%">scale up</i>`;
+    $(`gv${side}`).textContent = isA ? disp.toFixed(1) + "s" : Math.round(disp * 100) + "%";
+  }
+  function drawFleet(st, cfg2, span2, now, uxCeil, force) {
+    const side = st.side;
+    const t = st.last;
+    if (!t) return;
+    const qn = t.queueTotal;
+    const oldest = t.oldest;
+    st._live = t;
+    $("qn" + side).textContent = String(qn);
+    const qo = $("qo" + side);
+    if (qn) st._oldestAt = now;
+    const hold = qn || st._oldestAt !== void 0 && now - st._oldestAt < 6;
+    st._showOldest = hold ? Math.max(st._showOldest || 0, oldest) : 0;
+    const txt = hold ? fmtT(st._showOldest) : "\u2014";
+    if (qo.textContent !== txt) qo.textContent = txt;
+    qo.classList.toggle("empty", !hold);
+    qo.classList.toggle("stale", !qn && hold);
+    if (t.arrived) {
+      const a = $("arr" + side);
+      a.textContent = `+${t.arrived} arrived`;
+      a.classList.remove("flash");
+      void a.offsetWidth;
+      a.classList.add("flash");
+    }
+    const shown = t.chips.slice(0, 42);
+    const csig = shown.map((j) => j.id + ":" + (j.rq ? 1 : 0)).join(",");
+    if (csig !== st._chipSig || force) {
+      const prevIds = new Set((st._chipSig || "").split(",").map((s) => +s.split(":")[0]));
+      $("chips" + side).innerHTML = shown.map(
+        (j) => `<div class="chip${j.rq ? " rq" : ""}${j.id === shown[0]?.id ? " next" : ""}${prevIds.size && !prevIds.has(j.id) ? " land" : ""}"></div>`
+      ).join("") + (qn > 42 ? `<div class="chip more">+${qn - 42}</div>` : "");
+      st._chipSig = csig;
+    }
+    const CAP = Math.max(1, cfg2.max);
+    const rack = $("pods" + side);
+    const rows = Math.ceil(CAP / 4);
+    if (+rack.style.getPropertyValue("--rows") !== rows) rack.style.setProperty("--rows", String(rows));
+    const psig = CAP + "|" + t.pods.map(
+      (p) => `${p.id}:${p.state}${p.term ? "T" : ""}:${p.term ? Math.max(0, Math.ceil((p.graceAt ?? now) - now)) : 0}:${p.busy}:${p.slots.map((s) => s ? s.rq ? 2 : 1 : 0).join("")}`
+    ).join(",");
+    if (psig !== st._podSig || force) {
+      const pods = t.pods.slice(0, CAP);
+      const extra = t.pods.length - pods.length;
+      const cell = (p) => {
+        const cls = p.term ? "term" : p.state === "start" ? "starting" : "";
+        const glyph = p.term ? ["\u2193", "term"] : p.state === "start" ? ["\u2191", "start"] : p.busy ? ["\u25B6", "proc"] : ["\u25E6", ""];
+        const title = p.term ? `shutting down \xB7 ${Math.max(0, Math.ceil((p.graceAt ?? now) - now))}s grace left` : p.state === "start" ? "starting up" : p.busy ? "processing" : "idle, no work";
+        return `<div class="pod ${cls}" title="${title}"><div class="phead"><span class="glyph ${glyph[1]}">${glyph[0]}</span><span><b>${p.busy}/${p.slotsPerPod}</b></span></div><div class="slots">${p.slots.map((s) => `<div class="slot${s ? s.rq ? " busy rq" : " busy" : ""}"></div>`).join("")}</div></div>`;
+      };
+      $("pods" + side).innerHTML = extra ? pods.slice(0, CAP - 1).map(cell).join("") + `<div class="pod ghost">+${extra} more</div>` : pods.map(cell).join("") + '<div class="pod ghost"></div>'.repeat(Math.max(0, CAP - pods.length));
+      st._podSig = psig;
+    }
+    const isA = side === "A";
+    const aim = isA ? cfg2.aimA : cfg2.aimB;
+    gauge(side, t.disp, aim, cfg2.tol, isA);
+    const left = Math.max(0, st.lastSyncT - now);
+    $(`nxf${side}`).style.height = (Math.min(1, left / cfg2.sync) * 100).toFixed(1) + "%";
+    $(`nxn${side}`).textContent = Math.ceil(left) + "s";
+    $(`nxt${side}`).title = `next HPA check in ${Math.ceil(left)}s \xB7 period ${cfg2.sync}s`;
+    const aimTxt = isA ? `${cfg2.aimA}s` : `${Math.round(cfg2.aimB * 100)}%`;
+    $(isA ? "gkA" : "gkB").textContent = (isA ? "task wait in line (s)" : "slot fullness") + ` \xB7 aim ${aimTxt}`;
+    const pv = $("chP_" + side), mv = $("chM_" + side);
+    delete pv.dataset["dash"];
+    pv.dataset["floor"] = "0";
+    pv.dataset["ceil"] = String(cfg2.max);
+    pv.dataset["fixed"] = "1";
+    pv.dataset["grey"] = "want";
+    mv.dataset["dash"] = "1";
+    mv.dataset["span"] = isA ? "0.6" : "0.35";
+    if (isA) {
+      mv.dataset["floor"] = "0";
+      delete mv.dataset["ceil"];
+    } else {
+      delete mv.dataset["floor"];
+      mv.dataset["ceil"] = "1.6";
+    }
+    const stepSeries = st.series.map((s) => ({ t: s.t, pods: s.pods, want: s.want, mratio: s.metric / aim }));
+    spark(pv, stepSeries, "pods", cssVar("--blue"), true, span2, now);
+    spark(mv, stepSeries, "mratio", isA ? cssVar("--orange") : cssVar("--green"), false, span2, now);
+    const uv = $("chU_" + side);
+    delete uv.dataset["dash"];
+    delete uv.dataset["span"];
+    uv.dataset["fixed"] = "1";
+    uv.dataset["floor"] = "0";
+    uv.dataset["ceil"] = String(uxCeil);
+    uv.dataset["grey"] = "p95";
+    uv.dataset["greyall"] = "1";
+    uv.dataset["greycol"] = cssVar("--orange");
+    const uxS = st.ux.map((s) => ({ t: s.t, pods: s.old, p95: s.p95, rate: s.rate }));
+    uv.dataset["rate"] = "rate";
+    spark(uv, uxS, "pods", cssVar("--red"), false, span2, now);
+    const rng = (cv, d) => {
+      const a = parseFloat(cv.dataset["yMin"]), b = parseFloat(cv.dataset["yMax"]);
+      return Number.isFinite(a) && Number.isFinite(b) ? `${a.toFixed(d)}\u2013${b.toFixed(d)}` : "\u2014";
+    };
+    $("ctP_" + side).innerHTML = `pods \xB7 scale ${rng(pv, 0)} <span style="color:#64748b">\u2014 grey = wanted</span>`;
+    $("ctM_" + side).textContent = (isA ? "wait \xF7 aim" : "fullness \xF7 aim") + ` \xB7 dashed = aim \xB7 scale ${rng(mv, 1)}\xD7`;
+    $("ctU_" + side).innerHTML = `end-user: <b class="r">worst live wait</b> \xB7 <b class="o">p95 turnaround</b> \xB7 scale ${rng(uv, 0)}s \xB7 <b class="b">arrivals</b> ${uv.dataset["rMax"] || "\u2013"}/min`;
+    const lg = $("log" + side);
+    const sig = st.log.length + "|" + (st.log[0]?.html || "");
+    if (sig !== st._logSig || force) {
+      const paused = lg._scrolledUp && lg._hover;
+      lg.innerHTML = st.log.slice().map((l) => l.html).reverse().join("<br>");
+      if (!paused) lg.scrollTop = lg.scrollHeight;
+      st._logSig = sig;
+    }
+  }
+  function cardFor(rep, cfg2, side, t) {
+    const isA = side === "A";
+    const tol = cfg2.tol;
+    const band = Math.round(tol * 100);
+    const aimTxt = isA ? `${cfg2.aimA}s` : `${Math.round(cfg2.aimB * 100)}%`;
+    const fmtM = (m) => isA ? `${m.toFixed(1)}s` : `${Math.round(m * 100)}%`;
+    const wx = (v) => v === void 0 || !Number.isFinite(v) ? "\u2014" : String(v);
+    const secs = [];
+    let owner = 0;
+    const from = rep.current;
+    if (rep.shortCircuit) {
+      secs.push({
+        t: "what the metric wants",
+        k: `spec.minReplicas / spec.maxReplicas`,
+        v: rep.prenorm,
+        tone: "stop",
+        L: [`You already sit outside the fleet's hard limits (<span class="k">minReplicas: ${cfg2.min}</span> to <span class="k">maxReplicas: ${cfg2.max}</span>), so k8s just drags the count back to ${rep.prenorm} \u2014 <b>your metric is not even read this round.</b>`]
+      });
+      owner = 1;
+    } else if (rep.proposal) {
+      const p = rep.proposal;
+      const d = p.detail;
+      const cr = d.kind === "Value" ? d.readyPods : d.statusReplicas;
+      const prod = d.kind === "Value" ? d.totalUsage / d.target * d.readyPods : d.kind === "AverageValue" ? d.totalUsage / d.target : d.totalUsage / d.target * d.readyPods;
+      const curLbl = isA ? d.kind === "Value" ? "oldest queued job" : "queue wait, one series per pod" : "mean slot fullness";
+      const curTxt = fmtM(isA && d.kind !== "Value" ? rep.scrape.disp : rep.scrape.disp);
+      const dir = p.withinTolerance || !isFinite(prod) ? "same" : p.replicaCount > cr ? "up" : p.replicaCount < cr ? "down" : "same";
+      const l = [
+        `<div class="eqrow">
+         <div class="fraceq gc1to5">
+           <span class="lhs"><i>desiredReplicas</i> = ceil&nbsp;[</span>
+           <span class="cbox"><i>currentReplicas</i><b>${cr}</b><em>${d.kind === "Value" ? "readyPods" : "status.replicas"}</em></span>
+           <span class="car">\xD7</span>
+           <span class="frac">
+             <span class="num"><span class="cbox mid"><i>currentMetricValue</i><b>${curTxt}</b><em>${curLbl}</em></span></span>
+             <span class="fbar"></span>
+             <span class="den"><span class="cbox"><i>desiredMetricValue</i><b>${aimTxt}</b><em>your target</em></span></span>
+           </span>
+           <span class="lhs">]</span>
+         </div>
+         <span class="car gc6">\u2192</span>
+         <span class="cbox res gc7 ${dir}"><i>desiredReplicas</i><b>${p.withinTolerance ? rep.current : p.replicaCount}</b><em>${p.withinTolerance ? `\xB1${band}% deadband` : "ceil(" + (isFinite(prod) ? prod.toFixed(1) : "\u2014") + ")"}</em></span>
+       </div>`
+      ];
+      if (isA && d.kind === "Value") {
+        l.push(p.withinTolerance ? `The oldest job in the queue is <b>${fmtM(rep.scrape.disp)}</b> deep \u2014 inside \xB1${band}% of the ${aimTxt} target, so the ratio sits in the deadband and nothing moves.` : `The whole queue is described by that single wait, and the formula multiplies it by every ready pod: ceil(${isFinite(prod) ? prod.toFixed(1) : "\u2014"}) = <b>${p.replicaCount}</b>.`);
+      } else if (isA) {
+        l.push(p.withinTolerance ? `The exporter stamps the same queue wait (${fmtM(rep.scrape.disp)}) on every pod series \u2014 the average across ${d.statusReplicas} pods is still <b>${fmtM(rep.scrape.disp)}</b>, inside \xB1${band}% of ${aimTxt}, so the deadband holds the fleet at ${rep.current}.` : `<span class="k">AverageValue</span> should measure per-pod work \u2014 but this exporter stamps the <b>same</b> queue wait on every pod series, so the average is still ${fmtM(rep.scrape.disp)} and ceil(total \xF7 ${aimTxt}) = ceil(${isFinite(prod) ? prod.toFixed(1) : "\u2014"}) = <b>${p.replicaCount}</b>. The per-pod averaging is a mirage: nothing gets divided.`);
+      } else {
+        l.push(p.withinTolerance ? `Pods average <b>${fmtM(rep.scrape.disp)}</b> busy against a ${aimTxt} target \u2014 inside \xB1${band}%, so the deadband holds the fleet at ${rep.current}.` : `Each pod measures its own slots; ${fmtM(rep.scrape.disp)} is the average across ${d.statusReplicas} of them. Work at target density fits in ceil(${isFinite(prod) ? prod.toFixed(1) : "\u2014"}) = <b>${p.replicaCount}</b> pods.`);
+      }
+      secs.push({ t: "what the metric wants", k: tgtLine(cfg2, side), v: p.replicaCount, tone: p.withinTolerance ? "stop" : "", L: l });
+      if (p.withinTolerance) owner = 1;
+    }
+    if (rep.stabilized !== void 0 && rep.pool && rep.rate) {
+      const want2 = rep.prenorm;
+      const rec = rep.stabilized;
+      const heldBy = rep.heldBy && rep.heldBy !== "none" ? rep.heldBy : "";
+      const dir2 = rec > from ? "up" : rec < from ? "down" : "same";
+      const upWin = cfg2.up.win, dnWin = cfg2.down.win;
+      const pool = rep.pool.map((r) => ({
+        v: r.recommendation,
+        up: r.t > t - upWin,
+        dn: r.t > t - dnWin,
+        now: r.t === t
+      })).reverse();
+      const ups = pool.filter((p) => p.up), dns = pool.filter((p) => p.dn);
+      const lo = ups.length ? ups.reduce((m, p) => p.v < m.v ? p : m) : null;
+      const hi = dns.length ? dns.reduce((m, p) => p.v > m.v ? p : m) : null;
+      const fresh = pool.find((p) => p.now);
+      const chip = (p) => {
+        const id = lo !== hi && p === lo ? ' id="chipL"' : lo !== hi && p === hi ? ' id="chipH"' : "";
+        return `<span${id} class="chip${p === fresh ? " now" : ""}${p.up ? "" : " dn"}">${p.v}</span>`;
+      };
+      const l = [
+        `<div class="poolrow">
+         <div class="poolhead">recent desired counts <span class="fine">\xB7 newest \u2192 oldest \xB7 dim = outside the ${upWin}s up-window</span></div>
+         <div class="pool">${pool.map(chip).join("")}</div>
+       </div>
+       <div class="eqrow">
+         <span class="cbox gc1" data-clampto="lc"><i>lower clamp</i><b>${wx(rep.upBound)}</b><em>lowest of the last ${upWin}s</em></span>
+         <span class="car">\u2264</span>
+         <span class="cbox mid"><i>current pod count</i><b>${from}</b><em>what gets clamped</em></span>
+         <span class="car">\u2264</span>
+         <span class="cbox" data-clampto="uc"><i>upper clamp</i><b>${wx(rep.downBound)}</b><em>highest of the last ${dnWin}s</em></span>
+         <span class="car">\u2192</span>
+         <span class="cbox res ${dir2}"><i>stabilizedCount</i><b>${rec}</b><em>${heldBy ? heldBy === "up-window" ? "raised by lower clamp" : "cut by upper clamp" : "unchanged"}</em></span>
+       </div>`
+      ];
+      l.push(heldBy === "up-window" ? `Your fleet has <b>${from} pods</b>, which is below the lower clamp of ${wx(rep.upBound)} \u2014 the result is raised to ${rec}.` : heldBy === "down-window" ? `Your fleet has <b>${from} pods</b>, which is above the upper clamp of ${wx(rep.downBound)} \u2014 the result is cut to ${rec}.` : `Your fleet has <b>${from} pods</b>, which already sits between the two clamps \u2014 the result stays ${rec}.`);
+      l.push(`<span class="fine">the arrows show what each window extracted from the list: <b>lowest</b> bright value \u2192 lower clamp, <b>highest</b> value \u2192 upper clamp.</span>`);
+      secs.push({
+        t: "what recent history allows",
+        k: "spec.behavior.scaleUp | scaleDown .stabilizationWindowSeconds",
+        v: rec,
+        tone: rec !== from ? "hit" : rec !== want2 ? "stop" : "pass",
+        L: l
+      });
+    }
+    if (rep.rate && rep.stabilized !== void 0) {
+      const rec = rep.stabilized;
+      const to2 = rep.desired;
+      const upD = rep.rate.upDetail, dnD = rep.rate.downDetail;
+      const floorV = rep.rate.floor ?? cfg2.min;
+      const ceilV = rep.rate.ceiling ?? cfg2.max;
+      const dir3 = to2 > from ? "up" : to2 < from ? "down" : "same";
+      const capped = rep.desired !== rec ? rec > ceilV ? "ceiling" : "floor" : "inside";
+      const why = (d, up) => {
+        if (!d || !d.policySet) return up ? `up limit` : `down limit`;
+        const ps = d.policySet;
+        return `${ps.type} ${ps.type === "Percent" ? ps.value + "%" : ps.value}/${ps.periodSeconds}s`;
+      };
+      const isUpSide = (d) => d === rep.rate.upDetail;
+      const op = (d) => isUpSide(d) ? "+" : "\u2212";
+      const how = (d) => {
+        if (!d) return "\u2014";
+        if (!d.policies.length) return d.sentinel ? "no policies in this block \u2014 direction frozen" : "";
+        const parts = d.policies.map((x) => {
+          const startTxt = `start: ${from} \u2212 ${x.addedInPeriod} up + ${x.deletedInPeriod} down (last ${x.p.periodSeconds}s) = ${x.periodStart}`;
+          const calc = x.p.type === "Pods" ? `${x.periodStart} ${op(d)} ${x.p.value} = ${x.proposed}` : `${x.periodStart} \xD7 (1${op(d)}${x.p.value}%) = ${x.proposed}`;
+          return `${startTxt} \u2192 ${x.p.type}: ${calc}`;
+        });
+        return parts.join(" \xB7 ") + ` \u21D2 ${d.limit}`;
+      };
+      const l = [
+        `<div class="eqrow">
+         <span class="cell gc1"><span class="cbox"><i>scaleDown limit</i><b>${wx(dnD?.limit)}</b><em>${why(dnD, false)} \xB7 selectPolicy ${cfg2.down.sel}</em></span><span class="drop">\u2193</span></span>
+         <span class="cell gc5"><span class="cbox"><i>scaleUp limit</i><b>${wx(upD?.limit)}</b><em>${why(upD, true)} \xB7 selectPolicy ${cfg2.up.sel}</em></span><span class="drop">\u2193</span></span>
+       </div>
+       <div class="eqrow">
+         <span class="cbox"><i>floor</i><b>${floorV}</b><em>max(<span class="k">minReplicas ${cfg2.min}</span>, scaleDown ${wx(dnD?.limit)})</em></span>
+         <span class="car">\u2264</span>
+         <span class="cbox mid"><i>stabilizedCount \xB7 from \u2461</i><b>${rec}</b><em>what history allows</em></span>
+         <span class="car">\u2264</span>
+         <span class="cbox"><i>ceiling</i><b>${ceilV}</b><em>min(<span class="k">maxReplicas ${cfg2.max}</span>, scaleUp ${wx(upD?.limit)})</em></span>
+         <span class="car">\u2192</span>
+         <span class="cbox res ${dir3}"><i>applied</i><b>${to2}</b><em>${capped === "ceiling" ? "capped by ceiling" : capped === "floor" ? "raised by floor" : "desire was inside"}</em></span>
+       </div>`
+      ];
+      l.push(capped === "ceiling" ? `History points at ${rec}, the ceiling says ${ceilV} at most this window \u2014 so the fleet moves ${to2 > from ? `up ${to2 - from}, and the rest of the wish waits for the next check` : `to ${to2}`}.` : capped === "floor" ? `History points at ${rec}, the floor says ${floorV} at minimum \u2014 pods leave at the pace of <b>${why(dnD, false)}</b>, no faster.` : `The stabilized ${rec} sits inside ${floorV}\u2013${ceilV}, so the speed limit doesn't bite: applied = ${to2}.`);
+      l.push(`<span class="fine">arithmetic: ${how(upD)} \xB7 ${how(dnD)}</span>`);
+      secs.push({
+        t: "how fast the fleet may move",
+        k: "spec.behavior.*.policies \xB7 selectPolicy \xB7 min/maxReplicas",
+        v: to2,
+        tone: to2 !== from ? "hit" : rep.desired !== rec ? "stop" : "pass",
+        L: l
+      });
+    }
+    if (!owner) {
+      const to2 = rep.desired;
+      owner = rep.rate && rep.stabilized !== void 0 && rep.desired !== rep.stabilized ? 3 : rep.stabilized !== void 0 && rep.stabilized !== rep.prenorm ? 2 : to2 !== rep.current ? 3 : 0;
+    }
+    const bits = [];
+    const tolHit = !!rep.proposal?.withinTolerance;
+    if (tolHit) bits.push("deadband");
+    if (rep.heldBy && rep.heldBy !== "none") bits.push(rep.heldBy === "down-window" ? `${cfg2.down.win}s window` : `${cfg2.up.win}s window`);
+    const to = rep.desired;
+    const want = rep.prenorm;
+    if (rep.rate?.reason === "ScaleUpLimit") bits.push("scaleUp policy");
+    if (rep.rate?.reason === "ScaleDownLimit") bits.push("scaleDown policy");
+    if (rep.rate?.reason === "TooManyReplicas") bits.push("maxReplicas");
+    if (rep.rate?.reason === "TooFewReplicas") bits.push("minReplicas");
+    const verdict = tolHit ? `Nothing changes: the fleet is right-sized within \xB1${band}%. Most checks end exactly like this \u2014 a boring HPA is a working HPA.` : to !== rep.current ? `The metric wants ${want} pods; you get ${to} \u2014 ${to > rep.current ? `adding ${to - rep.current}` : `removing ${rep.current - to}`} this window. The distance between those numbers is your pod-change speed limit.` : want === to ? `Every stage agrees: ${to} pods is right.` : `The metric says ${want}; the fleet stays at ${to}. ${owner === 2 ? `Recent history hasn't expired yet \u2014 stabilization pins the count while it lingers.` : owner === 3 ? `The speed limit for this window brackets the count at ${rep.rate?.floor ?? cfg2.min}\u2013${rep.rate?.ceiling ?? cfg2.max}.` : `Hard min/max limits decided it.`}`;
+    const head = `${fmtT(t)} \xB7 ` + (isA ? cfg2.modeA === "value" ? "Fleet A \u2014 External / Value" : "Fleet A \u2014 External / AverageValue" : "Fleet B \u2014 Pods / Utilization");
+    return { head, verdict, secs: secs.slice(0, 3), owner };
+  }
+  var tgtLine = (cfg2, side) => side === "A" ? `spec.metrics[].target: { type: ${cfg2.modeA === "value" ? "Value" : "AverageValue"}, value: ${cfg2.aimA}s }` : `spec.metrics[].target: { type: Utilization, averageUtilization: ${Math.round(cfg2.aimB * 100)}% }`;
+  function logLine(rep, cfg2, side, mSeq, t) {
+    const isA = side === "A";
+    const aimTxt = isA ? `${cfg2.aimA}s` : `${Math.round(cfg2.aimB * 100)}%`;
+    const fmtM = (m) => isA ? `${m.toFixed(1)}s` : `${Math.round(m * 100)}%`;
+    const dir = rep.desired > rep.current ? "up" : rep.desired < rep.current ? "down" : "info";
+    const from = rep.current, to = rep.desired, want = rep.prenorm;
+    const bits = [];
+    if (rep.proposal?.withinTolerance) bits.push("deadband");
+    if (rep.shortCircuit) bits.push(rep.shortCircuit === "above-max" ? "maxReplicas" : "minReplicas");
+    if (rep.heldBy === "down-window") bits.push(`${cfg2.down.win}s window`);
+    if (rep.heldBy === "up-window") bits.push(`${cfg2.up.win}s window`);
+    if (rep.rate?.reason === "ScaleUpLimit") bits.push("scaleUp policy");
+    if (rep.rate?.reason === "ScaleDownLimit") bits.push("scaleDown policy");
+    const wantTxt = want !== to ? `wants ${want} \u2192 ` : "";
+    const res = to !== from ? `${from} \u2192 <b>${to}</b>` : `stays <b>${to}</b>`;
+    return `<span class="t">${fmtT(t)}</span><span class="${dir} hl" data-m="${mSeq}">hpa: ${fmtM(rep.scrape.disp)} vs aim ${aimTxt} \u2192 ${wantTxt}${res}${bits.length ? " (" + bits.join(", ") + ")" : ""}</span>`;
+  }
+
+  // src/main.ts
+  var $2 = (id) => document.getElementById(id);
+  var cfg = defaultCfg();
+  var span = 900;
+  var speed = 30;
+  var running = false;
+  var lastReal = 0;
+  var stores = { A: mkStore("A"), B: mkStore("B") };
+  var world;
+  var metricA = (f, now) => {
+    const h = f.queue[0];
+    const age = h ? Math.max(0, now - h.arrive) : 0;
+    if (cfg.modeA === "value") return { sum: age, perPod: [], disp: age };
+    const live = Math.max(0, f.pods.filter((p) => !p.term).length);
+    return { sum: age * live, perPod: [], disp: live ? age : 0 };
+  };
+  var metricB = (f, _now) => {
+    const perPod = f.pods.map((p) => ({
+      podId: p.id,
+      ready: p.state === "run" && !p.term,
+      value: (p.state === "run" ? p.slots.filter(Boolean).length : 0) * 10,
+      // 10 slots = 100%
+      request: 100,
+      window: cfg.metWin
+    }));
+    const live = perPod.filter((p) => p.ready).length;
+    const sum = perPod.reduce((a, p) => a + p.value, 0);
+    return { sum, perPod, disp: live ? sum / live / 100 : 0 };
+  };
+  function buildWorld() {
+    world = new World({
+      seed: cfg.seed,
+      hpa: toUserHpa(cfg),
+      fleet: fleetCfg(cfg),
+      workload: workloadCfg(cfg),
+      flags: { downscaleStabilizationWindow: cfg.down.win, tolerance: cfg.tol, syncPeriod: cfg.sync },
+      fleets: [
+        {
+          id: "A",
+          target: cfg.modeA === "value" ? { type: "Value", targetValue: cfg.aimA } : { type: "AverageValue", targetValue: cfg.aimA },
+          metric: metricA
+        },
+        {
+          id: "B",
+          target: { type: "Utilization", averageUtilization: Math.round(cfg.aimB * 100) },
+          metric: metricB
+        }
+      ]
+    });
+    for (const side of ["A", "B"]) {
+      const st = stores[side];
+      const id = side;
+      world.sim.on(`${id}.view.tick`, (pl) => {
+        const t = pl;
+        st.last = t;
+        st.ux.push(t.ux);
+        while (st.ux.length > 2 && st.ux[0].t < t.ux.t - 7200) st.ux.shift();
+      });
+      world.sim.on(`${id}.hpa.sync`, (pl, t) => {
+        const rep = pl;
+        st.lastReport = rep;
+        st.lastSyncT = t + cfg.sync;
+        st.series.push({
+          t,
+          pods: rep.live,
+          want: rep.prenorm,
+          metric: rep.scrape.disp,
+          rec: rep.stabilized ?? rep.prenorm,
+          spec: rep.desired
+        });
+        if (st.series.length > span * 30) st.series.splice(0, 2e3);
+        const mSeq = ++st.mathSeq;
+        st.log.push({ t, html: logLine(rep, cfg, side, mSeq, t) });
+        const card = cardFor(rep, cfg, side, t);
+        st.maths.set(mSeq, card);
+        if (st.maths.size > 350) st.maths.delete(st.maths.keys().next().value);
+        if (st.log.length > 300) st.log.shift();
+      });
+      world.sim.on(`${id}.pod.kill`, (pl, t) => {
+        const { pod, requeued } = pl;
+        if (requeued > 0)
+          st.log.push({ t, html: `<span class="t">${fmtT(t)}</span><span class="kill">pod-${pod.id} killed at grace \u2014 ${requeued} job(s) requeued</span>` });
+      });
+    }
+  }
+  function worldReset() {
+    cfg = readCfg();
+    buildWorld();
+    for (const st of [stores.A, stores.B]) {
+      st.series.length = 0;
+      st.ux.length = 0;
+      st.log.length = 0;
+      st.maths.clear();
+      st.mathSeq = 0;
+      st.last = null;
+      st.lastReport = null;
+      st.lastSyncT = cfg.sync;
+      st._chipSig = st._podSig = st._logSig = void 0;
+      st._oldestAt = st._showOldest = void 0;
+    }
+    renderAll(true);
+  }
+  function renderAll(force = false) {
+    $2("clock").textContent = `t ${fmtT(world.sim.now)}`;
+    const t0 = Math.max(0, Math.max(span, world.sim.now) - span);
+    let mx = 60;
+    for (const st of [stores.A, stores.B]) for (const s of st.ux)
+      if (s.t >= t0) mx = Math.max(mx, s.old, s.p95);
+    const uxCeil = Math.ceil(mx * 1.1 / 30) * 30;
+    drawFleet(stores.A, cfg, span, world.sim.now, uxCeil, force);
+    drawFleet(stores.B, cfg, span, world.sim.now, uxCeil, force);
+  }
+  var simAccum = 0;
+  function frame(ts) {
+    if (running) {
+      if (!lastReal) lastReal = ts;
+      simAccum += Math.min(0.1, (ts - lastReal) / 1e3) * speed;
+      lastReal = ts;
+      const step = Math.floor(simAccum);
+      if (step >= 1) {
+        simAccum -= step;
+        world.run(world.sim.now + step);
+        renderAll();
+      }
+    } else lastReal = 0;
+  }
+  var pump = (ts) => {
+    frame(ts);
+    requestAnimationFrame(pump);
+  };
+  requestAnimationFrame(pump);
+  function readCfg() {
+    const c = defaultCfg();
+    c.pattern = $2("selPattern").value;
+    c.rate = Math.max(1, +$2("inpRate").value || 80);
+    c.dur = Math.max(0.5, +$2("inpDur").value || 30);
+    c.sigma = Math.max(0, Number.isFinite(+$2("inpSigma").value) ? +$2("inpSigma").value : 0.6);
+    c.min = Math.max(0, +$2("yMin").value || 0);
+    c.max = Math.min(20, Math.max(c.min + 1, +$2("yMax").value || 12));
+    c.sync = Math.max(1, +$2("ySync").value || 30);
+    c.metWin = Math.max(1, +$2("yMetWin").value || 60);
+    c.startup = Math.max(0, Number.isFinite(+$2("inpStart").value) ? +$2("inpStart").value : 5);
+    c.grace = Math.max(0, Number.isFinite(+$2("inpGrace").value) ? +$2("inpGrace").value : 30);
+    c.poll = Math.max(0.05, Number.isFinite(+$2("inpPoll").value) ? +$2("inpPoll").value : 1);
+    c.up = {
+      win: +$2("yUpWin").value || 0,
+      pods: Math.max(0, +$2("yUpPods").value || 0),
+      podsPer: Math.max(1, +$2("yUpPodsPer").value || 60),
+      pct: Math.max(0, +$2("yUpPct").value || 0),
+      pctPer: Math.max(1, +$2("yUpPctPer").value || 60),
+      sel: $2("yUpSel").value
+    };
+    c.down = {
+      win: Math.max(0, Number.isFinite(+$2("yDnWin").value) ? +$2("yDnWin").value : 300),
+      pods: Math.max(0, +$2("yDnPods").value || 0),
+      podsPer: Math.max(1, +$2("yDnPodsPer").value || 60),
+      pct: Math.max(0, +$2("yDnPct").value || 0),
+      pctPer: Math.max(1, +$2("yDnPctPer").value || 60),
+      sel: $2("yDnSel").value
+    };
+    c.aimA = Math.max(0.1, +$2("inpTA").value || 1);
+    c.modeA = $2("selModeA").value;
+    c.aimB = Math.min(0.99, Math.max(0.05, (+$2("inpTB").value || 70) / 100));
+    c.seed = Math.floor(+$2("inpSeed").value) || 1;
+    c.tol = 0.1;
+    return c;
+  }
+  $2("btnPlay").onclick = () => {
+    running = !running;
+    $2("btnPlay").textContent = running ? "\u23F8 pause" : "\u25B6 run";
+  };
+  $2("btnReset").onclick = () => worldReset();
+  $2("btnSkip").onclick = () => {
+    world.run(world.sim.now + 300);
+    renderAll(true);
+  };
+  $2("btnCfg").onclick = () => $2("cfgBar").classList.toggle("open");
+  $2("btnBurst").onclick = () => world.burst(Math.max(1, +$2("inpBurst").value || 0));
+  $2("btnDice").onclick = () => {
+    $2("inpSeed").value = String(Math.floor(Math.random() * 1e6));
+    worldReset();
+  };
+  $2("selSpeed").onchange = () => {
+    speed = +$2("selSpeed").value;
+  };
+  for (const id of [
+    "inpRate",
+    "inpDur",
+    "inpSigma",
+    "inpStart",
+    "inpPoll",
+    "inpGrace",
+    "inpTA",
+    "inpTB",
+    "inpSeed",
+    "selPattern",
+    "selModeA",
+    "yMin",
+    "yMax",
+    "ySync",
+    "yMetWin",
+    "yUpWin",
+    "yUpPods",
+    "yUpPodsPer",
+    "yUpPct",
+    "yUpPctPer",
+    "yUpSel",
+    "yDnWin",
+    "yDnPods",
+    "yDnPodsPer",
+    "yDnPct",
+    "yDnPctPer",
+    "yDnSel"
+  ])
+    $2(id).addEventListener("change", () => worldReset());
+  addEventListener("resize", () => renderAll(true));
+  $2("selSpan").addEventListener("change", () => {
+    span = +$2("selSpan").value || 900;
+    renderAll(true);
+  });
+  for (const side of ["A", "B"]) {
+    const lg = $2("log" + side), glyph = $2("p" + side);
+    const paused = () => !!(lg._scrolledUp && lg._hover);
+    const refresh = () => {
+      const on = paused();
+      glyph.classList.toggle("on", on);
+      if (on && !lg._inside) {
+        const left = Math.max(0, Math.ceil((lg._until - Date.now()) / 1e3));
+        glyph.textContent = `\u23F8 ${left}s`;
+      } else glyph.textContent = "\u23F8 resume";
+    };
+    const tick = () => {
+      if (Date.now() >= lg._until) {
+        lg._hover = false;
+        clearInterval(lg._tick);
+        lg._tick = 0;
+      }
+      refresh();
+      if (!lg._tick && paused()) lg._tick = setInterval(tick, 250);
+    };
+    lg.addEventListener("mouseenter", () => {
+      lg._inside = lg._hover = true;
+      clearInterval(lg._tick);
+      lg._tick = 0;
+      refresh();
+    });
+    lg.addEventListener("mouseleave", () => {
+      lg._inside = false;
+      lg._until = Date.now() + 5e3;
+      refresh();
+      if (!lg._tick) lg._tick = setInterval(tick, 250);
+    });
+    lg.addEventListener("scroll", () => {
+      lg._scrolledUp = lg.scrollHeight - lg.scrollTop - lg.clientHeight > 8;
+      if (!lg._inside && lg._scrolledUp && lg._hover) lg._until = Date.now() + 5e3;
+      refresh();
+    }, { passive: true });
+    glyph.onclick = () => {
+      lg._hover = false;
+      lg._scrolledUp = false;
+      clearInterval(lg._tick);
+      lg._tick = 0;
+      lg.scrollTop = lg.scrollHeight;
+      refresh();
+    };
+  }
+  var tip = $2("mathTip");
+  function renderCard(side, seq) {
+    const st = stores[side];
+    const card = st.maths.get(seq);
+    if (!card) return false;
+    const secs = card.secs.map((s, i) => `<div class="psec ${s.tone}${i + 1 === card.owner ? " owner" : ""}"><div class="ph"><i>${s.t}${i + 1 === card.owner ? ' <span class="own">\u2190 decided it</span>' : ""}</i><b>${s.v}</b></div><div class="pk">${s.k || ""}</div><div class="pb">${s.L.join("<br>")}</div></div>`).join("");
+    tip.innerHTML = `<span class="mh">HPA check \xB7 ${card.head}</span><div class="verdict">${card.verdict}</div>` + secs;
+    return true;
+  }
+  function drawClamps() {
+    tip.querySelector("svg.clamplink")?.remove();
+    const pairs = [["chipL", "lc", "lc"], ["chipH", "uc", "uc"]];
+    const tr = tip.getBoundingClientRect();
+    const paths = [];
+    for (const [cid, box, cls] of pairs) {
+      const c = tip.querySelector("#" + cid), b = tip.querySelector(`[data-clampto="${box}"]`);
+      if (!c || !b) continue;
+      const cr = c.getBoundingClientRect(), br = b.getBoundingClientRect();
+      const x1 = cr.left + cr.width / 2 - tr.left, y1 = cr.bottom - tr.top;
+      const x2 = br.left + br.width / 2 - tr.left, y2 = br.top - tr.top;
+      if (y2 <= y1 + 2) continue;
+      const dy = y2 - y1, head = 7;
+      if (Math.abs(x2 - x1) < 2) {
+        paths.push(`<path class="${cls}" d="M ${x1.toFixed(1)} ${y1.toFixed(1)} L ${x1.toFixed(1)} ${(y2 - head).toFixed(1)}"/>`);
+      } else {
+        const my = y1 + dy / 2;
+        const dx = x2 > x1 ? 1 : -1;
+        const r = Math.min(8, Math.abs(x2 - x1) / 2, my - y1, y2 - head - my);
+        paths.push(
+          `<path class="${cls}" d="M ${x1.toFixed(1)} ${y1.toFixed(1)} L ${x1.toFixed(1)} ${(my - r).toFixed(1)} Q ${x1.toFixed(1)} ${my.toFixed(1)}, ${(x1 + dx * r).toFixed(1)} ${my.toFixed(1)} L ${(x2 - dx * r).toFixed(1)} ${my.toFixed(1)} Q ${x2.toFixed(1)} ${my.toFixed(1)}, ${x2.toFixed(1)} ${(my + r).toFixed(1)} L ${x2.toFixed(1)} ${(y2 - head).toFixed(1)}"/>`
+        );
+      }
+      paths.push(`<path class="${cls} ah" d="M ${(x2 - 4.5).toFixed(1)} ${(y2 - head).toFixed(1)} L ${x2.toFixed(1)} ${y2.toFixed(1)} L ${(x2 + 4.5).toFixed(1)} ${(y2 - head).toFixed(1)}"/>`);
+    }
+    if (!paths.length) return;
+    tip.insertAdjacentHTML(
+      "beforeend",
+      `<svg class="clamplink" width="${tr.width}" height="${tr.height}">${paths.join("")}</svg>`
+    );
+  }
+  for (const side of ["A", "B"]) {
+    const lg = $2("log" + side);
+    lg.addEventListener("mousemove", (e) => {
+      const h = e.target.closest?.(".hl");
+      if (!h || !h.dataset.m) {
+        tip.style.display = "none";
+        return;
+      }
+      if (!renderCard(side, +h.dataset.m)) {
+        tip.style.display = "none";
+        return;
+      }
+      tip.style.display = "block";
+      const r = tip.getBoundingClientRect();
+      let x = e.clientX + 14, y = e.clientY + 12;
+      if (x + r.width > innerWidth - 8) x = Math.max(8, e.clientX - r.width - 14);
+      if (y + r.height > innerHeight - 8) y = Math.max(8, innerHeight - r.height - 8);
+      tip.style.left = x + "px";
+      tip.style.top = y + "px";
+      drawClamps();
+    });
+    lg.addEventListener("mouseleave", () => {
+      tip.style.display = "none";
+    });
+  }
+  window.__sim = {
+    reset: worldReset,
+    run: (dt) => {
+      world.run(world.sim.now + dt);
+      renderAll();
+    },
+    stores: () => stores,
+    cfg: () => cfg,
+    world: () => world
+  };
+  worldReset();
+})();
+
+</script>
+</body>
+</html>
