@@ -1,0 +1,1409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet A vs Fleet B — HPA discrete event simulation</title>
+<style>
+  :root {
+    --bg: #0a0e15; --panel: #0e131c; --panel2: #141b27; --line: #1e2836;
+    --text: #d7e0ea; --muted: #66788f;
+    --busy: #3ecf8e; --blue: #5b9dff; --orange: #e6b455; --green: #4ade80;
+    --red: #f4695f; --pink: #e06c9a;
+    font-size: 14px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  header { position: sticky; top: 0; z-index: 10; background: rgba(10,14,21,.94);
+    backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); padding: 7px 16px; }
+  h1 { font-size: .9rem; margin: 0 0 5px; font-weight: 600; }
+  h1 small { color: var(--muted); font-weight: 400; margin-left: 10px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+  .grp { display: flex; align-items: center; gap: 6px; }
+  .grp label { color: var(--muted); font-size: .74rem; white-space: nowrap; }
+  input[type=number] { width: 58px; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px;
+    font: inherit; font-size: .78rem; }
+  select { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 5px; padding: 3px 6px; font: inherit; font-size: .78rem; }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 5px; padding: 4px 12px; cursor: pointer; font: inherit; font-size: .8rem; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: #1d3a5f; border-color: var(--blue); color: #cfe2ff; }
+  .clock { color: var(--muted); min-width: 76px; }
+  .adv { display: none; margin-top: 8px; }
+  .adv.open { display: flex; }
+  .cfg { display: none; margin-top: 8px; gap: 12px;
+    grid-template-columns: 1fr 1fr; align-items: start; }
+  .cfg.open { display: grid; }
+  @media (max-width: 1100px) { .cfg.open { grid-template-columns: 1fr; } }
+  .yamlbox { margin: 0; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 14px; font-size: .78rem; line-height: 1.6;
+    color: var(--muted); overflow-x: auto; }
+  .yamlbox .k { color: var(--text); }
+  .yamlbox .v { color: var(--blue); }
+  .yamlbox .cm { color: #44607e; }
+  .yamlbox input { width: 54px; padding: 0 4px; background: transparent; border: none;
+    border-bottom: 1px dashed var(--muted); border-radius: 0; color: var(--orange);
+    font: inherit; }
+  .yamlbox select { padding: 0 2px; background: transparent; border: none;
+    border-bottom: 1px dashed var(--muted); border-radius: 0; color: var(--orange);
+    font: inherit; }
+  main { padding: 10px 14px 20px; max-width: 1760px; margin: 0 auto; }
+  .fleet-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: stretch; }
+  @media (max-width: 860px) { .fleet-wrap { grid-template-columns: 1fr; } }
+  section.fleet { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 12px 14px; min-width: 0;
+    display: flex; flex-direction: column; }
+  .fleet h2 { margin: 0; font-size: .95rem; font-weight: 600; }
+  .fleet h2 .aw { color: var(--orange); } .fleet h2 .bw { color: var(--green); }
+  .sub { color: var(--muted); font-size: .72rem; margin: 4px 0 9px; }
+  /* the one metric this HPA scales on, inline in the fleet box */
+  .fyaml { margin: 0 0 9px; padding: 7px 10px; background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 8px; font-size: .72rem;
+    line-height: 1.55; color: var(--text); overflow-x: auto; }
+  .fyaml .cm { color: #44607e; }
+  .fyaml .k { color: var(--muted); }
+  .fyaml input { width: 46px; padding: 0 4px; background: transparent; border: none;
+    border-bottom: 1px dashed var(--muted); border-radius: 0; color: var(--orange);
+    font: inherit; }
+  .fyaml select { padding: 0 2px; background: transparent; border: none;
+    border-bottom: 1px dashed var(--muted); border-radius: 0; color: var(--orange);
+    font: inherit; }
+  /* oldest-wait: fade instead of flicker — dim while it's a held/frozen reading,
+     faintest when truly empty (the text itself never toggles rapidly, see drawFleet) */
+  .qline #qoA, .qline #qoB { transition: opacity .6s ease, color .6s ease; }
+  .qline #qoA.stale, .qline #qoB.stale { opacity: .55; font-weight: 400; }
+  .qline #qoA.empty, .qline #qoB.empty { opacity: .35; font-weight: 400; }
+  .qline { display: flex; justify-content: space-between; align-items: baseline;
+    font-size: .8rem; margin-bottom: 6px; }
+  .qline b { color: #fff; font-weight: 600; }
+  .qline .arr { color: var(--green); font-size: .78rem; opacity: 0; }
+  .qline .arr.flash { animation: flash 1.6s ease-out; }
+  @keyframes flash { 0% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; } }
+  /* reserved-height zones: queue chips & pod grid keep a fixed footprint so the
+     gauge / sparklines / log sit at the SAME height in both fleets — the whole
+     point of side-by-side is not having to chase the eye between panels */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; height: 48px;   /* exactly 2 rows, fixed */
+    overflow: hidden; margin-bottom: 10px; align-content: flex-start; }
+  .chip { width: 27px; height: 21px; border-radius: 6px; background: var(--panel2);
+    border: 1px solid var(--line); flex: none; }
+  .chip.next { border: 2px solid var(--blue); background: transparent; }
+  .chip.rq { border-color: var(--pink); background: color-mix(in srgb, var(--pink) 18%, var(--panel2)); }
+  .chip.more { width: auto; padding: 0 8px; display: grid; place-items: center;
+    color: var(--muted); font-size: .68rem; border-style: dashed; }
+  .chip.land { animation: land .5s ease-out; }
+  @keyframes land { from { transform: translateY(-10px) scale(1.3); opacity: 0; } to { opacity: 1; } }
+  /* rack sized to maxReplicas (rows = ceil(max/4)): pods arriving/leaving can't
+     shove the gauge, sparklines and log around — the box only resizes when the
+     YAML's maxReplicas changes, never mid-simulation */
+  .pods { --rows: 3; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: repeat(var(--rows), minmax(0, 1fr)); gap: 8px;
+    height: calc(var(--rows) * 70px + (var(--rows) - 1) * 8px);
+    overflow: hidden; margin-bottom: 2px; transition: height .25s ease; }
+  .pod { background: var(--panel2); border: 1px solid var(--line); border-radius: 9px;
+    padding: 6px 8px 8px; min-height: 0; overflow: hidden; }
+  .phead { display: flex; justify-content: space-between; align-items: center; font-size: .72rem;
+    color: var(--muted); margin-bottom: 6px; }
+  .phead .glyph { font-size: .85rem; font-weight: 700; color: var(--muted); }
+  .phead .glyph.start { color: var(--blue); }
+  .phead .glyph.proc { color: var(--busy); }
+  .phead .glyph.term { color: var(--red); }
+  .phead b { color: var(--text); font-weight: 600; }
+  .pod.ghost { border-style: dashed; border-color: #182233; background: transparent;
+    display: grid; place-items: center; color: var(--muted); font-size: .72rem; }
+  .pod.starting { border-style: dashed; opacity: .65; }
+  .pod.term { border-color: color-mix(in srgb, var(--red) 55%, var(--line)); opacity: .8; }
+  .slots { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+  .slot { height: 13px; border-radius: 4px; background: #1a2331; }
+  .slot.busy { background: var(--busy); }
+  .slot.rq { background: var(--pink); }
+  .spacer { flex: 1 1 18px; min-height: 18px; }
+  .glabel { display: flex; justify-content: space-between; font-size: .8rem; margin-bottom: 6px; }
+  .glabel .k { color: var(--muted); } .glabel .v { color: #fff; font-weight: 600; }
+  .gbar { position: relative; height: 11px; border-radius: 6px; background: #151d2a;
+    border: 1px solid var(--line); overflow: visible; margin-bottom: 3px; }
+  .gfill { position: absolute; inset: 2px auto 2px 2px; width: 0; border-radius: 5px;
+    background: var(--muted); transition: width .15s linear, background .3s; z-index: 2; }
+  /* fill takes the colour of the action the reading would trigger */
+  .gfill.hot { background: var(--blue); }    /* over aim → scale up */
+  .gfill.cold { background: var(--red); }    /* under aim → scale down */
+  .gtick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text); opacity: .8; z-index: 3; }
+  /* deadband zones painted on the bar: ratio < 0.9 → hpa scales down,
+     0.9–1.1 → deadband (no action), > 1.1 → scales up */
+  .gzone { position: absolute; top: 0; bottom: 0; z-index: 1; }
+  .gzone.down { background: rgba(244,105,95,.16); left: 0; border-radius: 5px 0 0 5px; }
+  .gzone.hold { background: rgba(102,120,143,.30); }
+  .gzone.up { background: rgba(91,157,255,.14); right: 0; border-radius: 0 5px 5px 0; }
+  .gsub { position: relative; height: 1em; margin-bottom: 9px; }
+  .gsub i { position: absolute; transform: translateX(-50%); font-style: normal;
+    font-size: .66rem; color: var(--muted); white-space: nowrap; }
+  /* next-check countdown: fills down the full height of the charts, resetting
+     to full on each reconciliation — the HPA poll loop, made visible */
+  .chartrow { display: flex; gap: 10px; align-items: stretch; margin-bottom: 16px; }
+  .chartrow .charts { flex: 1; margin-bottom: 0; }
+  .nxt { display: flex; flex-direction: column; align-items: center; gap: 4px;
+    width: 14px; cursor: help; }
+  .nxtTrack { flex: 1; width: 4px; border-radius: 2px; background: #151d2a;
+    border: 1px solid var(--line); position: relative; overflow: hidden; }
+  .nxtFill { position: absolute; inset: auto 0 0 0; height: 100%;
+    background: var(--blue); opacity: .75; }
+  .nxtN { font-size: .62rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 10px; }
+  .chart.ux { margin-bottom: 16px; }
+  .ux .ct b.r { color: var(--red); font-weight: 400; }
+  .ux .ct b.o { color: var(--orange); font-weight: 400; }
+  .ux .ct b.b { color: var(--blue); font-weight: 400; }
+  .chart .ct { font-size: .73rem; color: var(--text); margin-bottom: 4px; }
+  .chart canvas { width: 100%; height: 92px; display: block; }
+  .log { border-top: 1px solid var(--line); padding-top: 8px;
+    font-size: .74rem; line-height: 1.62; height: 126px; overflow-y: auto;
+    scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  .log::-webkit-scrollbar { width: 6px; }
+  .log::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+  .logwrap { position: relative; }
+  .logpause { position: absolute; top: 11px; right: 10px; z-index: 2; display: none;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    color: var(--muted); font-size: .66rem; line-height: 1.3; padding: 2px 6px;
+    cursor: pointer; }
+  .logpause:hover { color: var(--text); border-color: var(--muted); }
+  .logpause.on { display: block; }
+  .log .up { color: var(--green); } .log .down { color: var(--red); }
+  .log .kill { color: var(--pink); } .log .info { color: var(--muted); }
+  .log .t { color: #4b5a6f; margin-right: 6px; }
+  .log .hl { cursor: help; }
+  .log .hl:hover { text-decoration: underline dotted var(--muted) 1px; text-underline-offset: 3px; }
+  #mathTip { position: fixed; z-index: 50; display: none; max-width: 730px;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 13px 16px; font-size: .88rem; line-height: 1.6; color: var(--muted);
+    box-shadow: 0 6px 24px rgba(0,0,0,.5); pointer-events: none; }
+  #mathTip b { color: var(--text); }
+  #mathTip .mh { color: var(--text); display: block; margin-bottom: 8px; }
+  #mathTip .verdict { color: var(--text); font-size: .94rem; line-height: 1.55;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 5px;
+    padding: 7px 11px; margin-bottom: 12px; }
+  #mathTip .k, #mathTip code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: .8rem; color: var(--blue); background: #101725; border-radius: 3px;
+    padding: 0 4px; white-space: nowrap; }
+  #mathTip .pk { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: .74rem; color: #4b5a6f; margin-top: 2px; white-space: normal; }
+  #mathTip .own { color: var(--muted); text-transform: none; letter-spacing: 0;
+    font-size: .74rem; }
+  #mathTip .psec.owner .ph i { color: var(--text); }
+  /* three phases, stacked in the order the controller runs them. Every phase
+     that ran is shown at full strength — a later phase only exists because the
+     earlier ones fed it. The border colour says what each phase did to the
+     number: green moved it, red blocked/capped it, grey passed it through. */
+  #mathTip .psec { border-left: 2px solid var(--line); padding: 0 0 0 11px;
+    margin: 0 0 12px; }
+  #mathTip .psec:last-child { margin-bottom: 0; }
+  #mathTip .ph { display: flex; justify-content: space-between; align-items: baseline;
+    gap: 14px; }
+  #mathTip .ph i { font-style: normal; font-size: .78rem; text-transform: uppercase;
+    letter-spacing: .07em; color: #4b5a6f; }
+  #mathTip .ph b { font-size: 1.05rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #mathTip .pb { font-size: .84rem; line-height: 1.55; margin-top: 3px; }
+  #mathTip .psec.stop { border-left-color: var(--red); }
+  #mathTip .psec.stop .ph b { color: var(--red); }
+  #mathTip .psec.hit { border-left-color: var(--green); }
+  #mathTip .psec.hit .ph b { color: var(--green); }
+  #mathTip .psec.pass { border-left-color: var(--line); }
+  #mathTip .warn { color: var(--red); }
+  #mathTip .ok { color: var(--green); }
+  #mathTip .fine { color: #55657c; font-size: .72rem; }
+  /* the canonical HPA formula, drawn AS the equation: a real fraction —
+     (currentReplicas × currentMetricValue) over desiredMetricValue — with
+     this check's live numbers inside each box. Serif italic labels, like
+     the textbook rendering. */
+  #mathTip .fraceq { display: flex; flex-wrap: wrap; align-items: center;
+    gap: 7px; margin: 4px 0 9px;
+    font-family: Georgia, 'Times New Roman', serif; }
+  #mathTip .lhs { font-style: italic; font-size: 1.02rem; color: var(--text); }
+  #mathTip .frac { display: flex; flex-direction: column; align-items: center;
+    gap: 6px; flex: 0 1 auto; }
+  #mathTip .num { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px;
+    justify-content: center; }
+  #mathTip .den { display: flex; justify-content: center; }
+  #mathTip .fbar { width: 100%; height: 0; border-top: 2px solid var(--muted); }
+  #mathTip .fraceq .cbox { flex: 0 0 auto; min-width: 84px; }
+  #mathTip .fraceq .cbox b { font-family: var(--font-sans, inherit); }
+  /* every diagram row is the SAME 7-column grid — box · box · box · result —
+     so the boxes and all three cards' result heroes line up in one column */
+  #mathTip .eqrow { display: grid; align-items: stretch; gap: 6px;
+    grid-template-columns: minmax(0,1fr) 26px minmax(0,1fr) 26px minmax(0,1fr) 26px 140px;
+    margin: 2px 0 7px; }
+  #mathTip .eqrow .cbox { min-width: 0; }
+  #mathTip .gc1 { grid-column: 1; } #mathTip .gc3 { grid-column: 3; }
+  #mathTip .gc5 { grid-column: 5; } #mathTip .gc6 { grid-column: 6; }
+  #mathTip .gc7 { grid-column: 7; }
+  #mathTip .gc1to5 { grid-column: 1 / 6; min-width: 0; }
+  #mathTip .eqrow .fraceq { margin: 0; }
+  #mathTip .eqrow .fraceq .cbox { min-width: 84px; }
+  /* the memory pool: recent desired counts as chips, newest = this check */
+  /* bottom margin = the corridor the chip→clamp connector curves run through */
+  #mathTip .poolrow { margin: 2px 0 14px; }
+  #mathTip .poolhead { font-size: .66rem; text-transform: uppercase;
+    letter-spacing: .06em; color: #4b5a6f; margin-bottom: 4px; }
+  #mathTip .pool { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; min-width: 0; }
+  #mathTip .chip { display: inline-flex; align-items: center; gap: 5px;
+    justify-content: center; font-variant-numeric: tabular-nums; font-size: .95rem;
+    min-width: 52px; padding: 4px 10px; border: 1px solid var(--line);
+    border-radius: 6px; background: var(--panel); color: var(--text); }
+  #mathTip .chip s { text-decoration: none; color: var(--muted); font-size: .62rem;
+    border: 1px solid var(--line); border-radius: 4px; padding: 0 4px;
+    line-height: 1.5; align-self: center; }
+  #mathTip .chip.now { border-color: var(--blue); color: var(--blue);
+    box-shadow: 0 0 0 1px var(--blue); }
+  #mathTip .chip.now s { border-color: var(--blue); color: var(--blue); }
+  #mathTip .chip.old { color: var(--muted); border-style: dashed; }
+  /* too old for the scaleUp window — feeds only the upper clamp */
+  #mathTip .chip.dn { opacity: .55; }
+  /* the two extracted chips take the colour of the trace + clamp they feed */
+  #mathTip .chip#chipL { border-color: var(--blue); color: var(--blue); }
+  #mathTip .chip#chipH { border-color: var(--orange); color: var(--orange); }
+  /* chip → clamp connectors, drawn after layout against real box positions */
+  #mathTip svg.clamplink { position: absolute; left: 0; top: 0;
+    pointer-events: none; z-index: 4; overflow: visible; }
+  #mathTip svg.clamplink path { fill: none; stroke-width: 1.6; }
+  #mathTip svg.clamplink path.ah { stroke-linecap: round; }
+  #mathTip svg.clamplink path.lc { stroke: var(--blue); }
+  #mathTip svg.clamplink path.uc { stroke: var(--orange); }
+  /* the clamp boxes take their trace's colour so chip and box read as pairs */
+  #mathTip .cbox[data-clampto="lc"] { border-color: var(--blue); }
+  #mathTip .cbox[data-clampto="lc"] i { color: var(--blue); }
+  #mathTip .cbox[data-clampto="uc"] { border-color: var(--orange); }
+  #mathTip .cbox[data-clampto="uc"] i { color: var(--orange); }
+
+  /* the ↓ lives inside the column cell, below its box — centered on the box
+     itself, not on a narrow grid track between boxes */
+  #mathTip .cell { display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
+  #mathTip .cell .cbox { flex: 1; min-width: 0; }
+  #mathTip .cell .drop { text-align: center; color: var(--muted);
+    font-size: 1.5rem; line-height: 1.1; height: 1.1em; }
+  #mathTip .cbox { display: flex; flex-direction: column; align-items: center;
+    gap: 1px; flex: 1 1 90px; min-width: 86px; padding: 6px 8px;
+    border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+  #mathTip .cbox i { font-style: normal; font-size: .66rem; text-transform: uppercase;
+    letter-spacing: .06em; color: #4b5a6f; }
+  #mathTip .cbox b { font-size: 1.5rem; line-height: 1.15; color: var(--text);
+    font-variant-numeric: tabular-nums; }
+  #mathTip .cbox em { font-style: normal; font-size: .64rem; color: var(--muted);
+    text-align: center; }
+  #mathTip .cbox.mid b { color: var(--blue); }
+  #mathTip .car { align-self: center; color: var(--muted); font-size: 1.5rem; line-height: 1; }
+  /* every card's result box lives in grid column 7 — same size, same edge,
+     so the three cards' heroes stack in one aligned column. Never stretch:
+     next to the tall fraction in card ① it would balloon to row height. */
+  #mathTip .cbox.res { border-color: var(--muted); align-self: center; }
+  #mathTip .cbox.res.up { border-color: var(--green); }
+  #mathTip .cbox.res.up b { color: var(--green); }
+  #mathTip .cbox.res.down { border-color: var(--red); }
+  #mathTip .cbox.res.down b { color: var(--red); }
+  .legend { margin-top: 18px; display: flex; flex-direction: column; gap: 6px;
+    font-size: .72rem; color: var(--muted); }
+  .legend .lrow { display: flex; flex-wrap: wrap; gap: 14px; align-items: baseline; }
+  .legend .lh { color: #4b5a6f; text-transform: uppercase; letter-spacing: .08em;
+    font-size: .62rem; width: 52px; flex: none; }
+  .legend .sw { display: inline-block; width: 14px; height: 2px; vertical-align: middle;
+    margin-right: 5px; border-radius: 1px; }
+  details.math { margin-top: 10px; font-size: .72rem; color: var(--muted); }
+  details.math summary { cursor: pointer; color: var(--text); }
+  details.math .mcol { max-width: 72ch; line-height: 1.6; padding-top: 6px; }
+  details.math p { margin: 0 0 8px; }
+  .note b { color: var(--text); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fleet A vs Fleet B — HPA discrete event simulation
+    <small>same jobs, same queue — only the autoscaler metric differs</small></h1>
+  <div class="bar">
+    <button id="btnPlay" class="primary">▶ run</button>
+    <button id="btnReset">reset</button>
+    <button id="btnSkip" title="jump the simulation ahead so the trend charts fill up">⏩ skip 5m</button>
+    <div class="grp"><label>speed</label>
+      <select id="selSpeed">
+        <option value="1">1×</option><option value="4">4×</option>
+        <option value="10">10×</option><option value="30" selected>30×</option>
+        <option value="100">100×</option><option value="300">300×</option>
+      </select></div>
+    <div class="grp"><label>window</label>
+      <select id="selSpan" title="how much history the trend graphs show">
+        <option value="900" selected>15m</option><option value="1800">30m</option>
+        <option value="3600">60m</option><option value="7200">120m</option>
+      </select></div>
+    <div class="clock" id="clock">t 00:00</div>
+    <div class="grp"><label>pattern</label>
+      <select id="selPattern">
+        <option value="steady" selected>steady</option>
+        <option value="ramp">ramp-up then plateau</option>
+        <option value="diurnal">waves</option>
+        <option value="idleburst">idle + bursts</option>
+      </select></div>
+    <div class="grp"><label>λ jobs/min</label><input type="number" id="inpRate" value="80" min="1" step="10"></div>
+    <div class="grp"><label>burst</label><input type="number" id="inpBurst" value="200" min="1" step="25" style="width:60px">
+      <button id="btnBurst">inject</button></div>
+    <div class="grp"><label>seed</label><input type="number" id="inpSeed" value="1234" style="width:70px">
+      <button id="btnDice">🎲</button></div>
+    <button id="btnCfg">shared config ▾</button>
+  </div>
+</header>
+<main>
+  <div class="cfg" id="cfgBar">
+<pre class="yamlbox"><span class="k">apiVersion:</span> apps/v1
+<span class="k">kind:</span> Deployment
+<span class="k">spec:</span>
+  <span class="k">replicas:</span> <span class="v">3</span>  <span class="cm"># baseline = minReplicas; HPA owns this field from t=0</span>
+  <span class="k">template:</span>
+    <span class="k">spec:</span>
+      <span class="k">terminationGracePeriodSeconds:</span> <input id="inpGrace" type="number" value="30" min="0" step="1">
+      <span class="k">containers:</span>
+        - <span class="k">name:</span> worker
+          <span class="k">image:</span> worker:1
+          <span class="k">args:</span> [<span class="v">--concurrency=10</span>]   <span class="cm"># 10 in-process slots per pod</span>
+          <span class="k">env:</span>
+            - <span class="k">name:</span> JOB_DURATION_MEAN_S  <span class="k">value:</span> <span class="v">"</span><input id="inpDur" type="number" value="30" min="0.5" step="1"><span class="v">"</span>
+            - <span class="k">name:</span> JOB_DURATION_SIGMA   <span class="k">value:</span> <span class="v">"</span><input id="inpSigma" type="number" value="0.6" min="0" step="0.1"><span class="v">"</span>
+              <span class="cm"># job runtime ~ lognormal(mean, sigma)</span>
+            - <span class="k">name:</span> POLL_INTERVAL_S      <span class="k">value:</span> <span class="v">"</span><input id="inpPoll" type="number" value="1" min="0.2" step="0.5"><span class="v">"</span>
+              <span class="cm"># how often each worker pulls from the queue (±50% jitter)</span>
+          <span class="k">startupProbe:</span>
+            <span class="k">initialDelaySeconds:</span> <input id="inpStart" type="number" value="5" min="0" step="1">  <span class="cm"># pod → Ready</span>
+</pre>
+<pre class="yamlbox"><span class="k">apiVersion:</span> autoscaling/v2
+<span class="k">kind:</span> HorizontalPodAutoscaler
+<span class="k">spec:</span>
+  <span class="k">minReplicas:</span> <input id="yMin" type="number" value="3" min="0">
+  <span class="k">maxReplicas:</span> <input id="yMax" type="number" value="12" min="1" max="20">
+  <span class="k">behavior:</span>
+    <span class="k">scaleUp:</span>
+      <span class="k">stabilizationWindowSeconds:</span> <input id="yUpWin" type="number" value="60" min="0" step="15">
+      <span class="k">policies:</span>
+        - <span class="k">type:</span> Pods      <span class="k">value:</span> <input id="yUpPods" type="number" value="2" min="0"> <span class="k">periodSeconds:</span> <input id="yUpPodsPer" type="number" value="60" min="1" step="15">
+        - <span class="k">type:</span> Percent   <span class="k">value:</span> <input id="yUpPct" type="number" value="50" min="0" step="5"> <span class="k">periodSeconds:</span> <input id="yUpPctPer" type="number" value="60" min="1" step="15">
+      <span class="k">selectPolicy:</span> <select id="yUpSel"><option>Max</option><option>Min</option><option>Disabled</option></select>
+    <span class="k">scaleDown:</span>
+      <span class="k">stabilizationWindowSeconds:</span> <input id="yDnWin" type="number" value="300" min="0" step="15">
+      <span class="k">policies:</span>
+        - <span class="k">type:</span> Pods      <span class="k">value:</span> <input id="yDnPods" type="number" value="1" min="0"> <span class="k">periodSeconds:</span> <input id="yDnPodsPer" type="number" value="60" min="1" step="15">
+        - <span class="k">type:</span> Percent   <span class="k">value:</span> <input id="yDnPct" type="number" value="25" min="0" step="5"> <span class="k">periodSeconds:</span> <input id="yDnPctPer" type="number" value="60" min="1" step="15">
+      <span class="k">selectPolicy:</span> <select id="yDnSel"><option>Min</option><option>Max</option><option>Disabled</option></select>
+  <span class="cm"># --horizontal-pod-autoscaler-sync-period:</span> <input id="ySync" type="number" value="30" min="1" step="15"><span class="cm">s</span>
+  <span class="cm"># metrics-server update window:</span> <input id="yMetWin" type="number" value="60" min="1" step="15"><span class="cm">s</span>
+</pre>
+  </div>
+  <div class="fleet-wrap">
+    <section class="fleet" id="fleetA">
+      <h2>Fleet A — autoscales on <span class="aw">queue wait</span></h2>
+      <pre class="fyaml">- <span class="k">type:</span> External
+  <span class="k">external:</span>
+    <span class="k">metric:</span> { <span class="k">name:</span> queue_wait_seconds }
+    <span class="k">target:</span> { <span class="k">type:</span> <select id="selModeA"><option value="value" selected>Value</option><option value="avg">AverageValue</option></select>, <span class="k">value:</span> <input id="inpTA" type="number" value="1" min="0.1" step="0.5">s }</pre>
+      <div class="qline"><span>queue <b id="qnA">0</b> waiting · oldest <b id="qoA">—</b></span><span class="arr" id="arrA"></span></div>
+      <div class="chips" id="chipsA"></div>
+      <div class="pods" id="podsA"></div>
+      <div class="spacer"></div>
+      <div class="glabel"><span class="k" id="gkA">task wait in line (s) · aim 1s</span><span class="v" id="gvA">—</span></div>
+      <div class="gbar"><div class="gzone down" id="gzAn"></div><div class="gzone hold" id="gzAh"></div><div class="gzone up" id="gzAu"></div><div class="gfill" id="gfA"></div><div class="gtick" id="gtA"></div></div>
+      <div class="gsub" id="gsA"></div>
+      <div class="chartrow">
+        <div class="nxt" id="nxtA" title="next HPA check">
+          <div class="nxtTrack"><div class="nxtFill" id="nxfA"></div></div>
+          <span class="nxtN" id="nxnA">–</span>
+        </div>
+        <div class="charts">
+          <div class="chart"><div class="ct" id="ctP_A">pods (3–9)</div><canvas id="chP_A"></canvas></div>
+          <div class="chart"><div class="ct" id="ctM_A">wait ÷ 3× aim · dashed = aim</div><canvas id="chM_A"></canvas></div>
+        </div>
+      </div>
+      <div class="chart ux"><div class="ct" id="ctU_A">end-user experience</div><canvas id="chU_A"></canvas></div>
+      <div class="logwrap"><span class="logpause" id="pA" title="history paused — click to resume">⏸ resume</span><div class="log" id="logA"></div></div>
+    </section>
+    <section class="fleet" id="fleetB">
+      <h2>Fleet B — autoscales on <span class="bw">slot fullness</span></h2>
+      <pre class="fyaml">- <span class="k">type:</span> Pods
+  <span class="k">pods:</span>
+    <span class="k">metric:</span> { <span class="k">name:</span> busy_slots }
+    <span class="k">target:</span> { <span class="k">type:</span> Utilization, <span class="k">averageUtilization:</span> <input id="inpTB" type="number" value="70" min="5" step="5">% }</pre>
+      <div class="qline"><span>queue <b id="qnB">0</b> waiting · oldest <b id="qoB">—</b></span><span class="arr" id="arrB"></span></div>
+      <div class="chips" id="chipsB"></div>
+      <div class="pods" id="podsB"></div>
+      <div class="spacer"></div>
+      <div class="glabel"><span class="k" id="gkB">slot fullness · aim 70%</span><span class="v" id="gvB">—</span></div>
+      <div class="gbar"><div class="gzone down" id="gzBn"></div><div class="gzone hold" id="gzBh"></div><div class="gzone up" id="gzBu"></div><div class="gfill" id="gfB"></div><div class="gtick" id="gtB"></div></div>
+      <div class="gsub" id="gsB"></div>
+      <div class="chartrow">
+        <div class="nxt" id="nxtB" title="next HPA check">
+          <div class="nxtTrack"><div class="nxtFill" id="nxfB"></div></div>
+          <span class="nxtN" id="nxnB">–</span>
+        </div>
+        <div class="charts">
+          <div class="chart"><div class="ct" id="ctP_B">pods (3–9)</div><canvas id="chP_B"></canvas></div>
+          <div class="chart"><div class="ct" id="ctM_B">fullness ÷ 3× aim · dashed = aim</div><canvas id="chM_B"></canvas></div>
+        </div>
+      </div>
+      <div class="chart ux"><div class="ct" id="ctU_B">end-user experience</div><canvas id="chU_B"></canvas></div>
+      <div class="logwrap"><span class="logpause" id="pB" title="history paused — click to resume">⏸ resume</span><div class="log" id="logB"></div></div>
+    </section>
+  </div>
+  <div class="legend">
+    <div class="lrow"><span class="lh">pods</span>
+      <span style="color:var(--blue)">↑ starting</span><span style="color:var(--busy)">▶ processing</span>
+      <span style="color:var(--muted)">◦ idle</span><span style="color:var(--red)">↓ shutting down</span>
+      <span style="color:var(--pink)">■ job requeued after a kill</span></div>
+    <div class="lrow"><span class="lh">graphs</span>
+      <span><i class="sw" style="background:var(--blue)"></i>replicas · / arrivals/min</span>
+      <span><i class="sw" style="background:#94a3b8"></i>wanted (pre-restriction)</span>
+      <span><i class="sw" style="background:var(--red)"></i>worst live wait</span>
+      <span><i class="sw" style="background:var(--orange)"></i>p95 turnaround</span></div>
+    <div class="lrow"><span class="lh">model</span>
+      <span>queue is <b>pull</b>: jobs wait for a pod's own poll tick · scale-down drains for
+      <b>grace</b>, unfinished jobs requeue</span></div>
+  </div>
+  <details class="math">
+    <summary>glossary — how an HPA decides, and why the two fleets diverge</summary>
+    <div class="mcol">
+      <p><b>Stabilization windows</b> (<code>behavior.scaleUp/scaleDown.stabilizationWindowSeconds</code>):
+        every few seconds the HPA computes a desired pod count; the windows remember those recent answers.
+        The <b>scaleUp window</b> scans the last N seconds and keeps the <b>lowest</b> answer — the result can
+        never land lower than it. The <b>scaleDown window</b> keeps the <b>highest</b> — the result can never
+        land higher. The answer itself starts at your <i>current</i> count and gets clamped between those two;
+        today's fresh reading only joins the memory pool. That's why a fleet lags a burst by a minute and
+        refuses to shrink for five: one old busy (or quiet) moment inside the window pins the range.</p>
+      <p><b>Rate policies</b> (<code>behavior.*.policies</code>): the speed limit on top of the wish —
+        e.g. +2 pods or +50% per 60s going up, −1 pod or −25% going down. <code>selectPolicy: Max</code>
+        picks the larger change, <code>Min</code> the smaller; <code>min/maxReplicas</code> clamp the result.</p>
+      <p><b>Fleet A — External/Value:</b> <code>desired = ceil(pods × wait ÷ aim)</code>.
+        Queue wait is ONE global number, identical on every exporter — HPA multiplies it by the pod
+        count, so the recommendation explodes (wait 18s × 5 pods = “want 93”).</p>
+      <p><b>Fleet A — External/AverageValue:</b> <code>desired = ceil(Σ wait ÷ aim)</code> over a
+        per-pod series that doesn't exist — it divides by pod counts that never contributed to the
+        measurement.</p>
+      <p><b>Fleet B — Pods/Utilization:</b> slot fullness is genuinely per-pod, so the math works —
+        its cost is that pod-busyness is blind to how deep the queue is.</p>
+    </div>
+  </details>
+  <div id="mathTip"></div>
+</main>
+<script>
+"use strict";
+/* ---------- rng (shared seed → identical job stream for both fleets) ---------- */
+let rs = 1;
+function resetRng(s) { rs = (s >>> 0) || 1; }
+function rnd() {
+  rs ^= rs << 13; rs >>>= 0; rs ^= rs >> 17; rs ^= rs << 5; rs >>>= 0;
+  return rs / 4294967296;
+}
+function lognormal(mean, sigma) {
+  if (sigma <= 0) return mean;
+  const u1 = Math.max(1e-9, rnd()), u2 = rnd();
+  return Math.max(0.3, Math.exp(Math.log(mean) - sigma * sigma / 2 + sigma * Math.sqrt(-2 * Math.log(u1)) * Math.cos(6.283185 * u2)));
+}
+
+/* ---------- config ---------- */
+const SLOTS = 10;
+/* Real-world timescales — nothing here is scaled for visibility; the speed selector is.
+   HPA reconciliation every 60s (sync period = metric update window), ±10% tolerance,
+   spec.behavior set to the cluster's standard (see the YAML panel), startup 5s,
+   terminationGracePeriodSeconds 30. */
+const cfg = { pattern: 'ramp', rate: 80, dur: 30, sigma: 0.6, min: 3, max: 12,
+  sync: 30, metWin: 60, tol: 0.1, startup: 5, grace: 30, poll: 1,
+  beh: {
+    up:   { win: 60,  pods: 2, podsPer: 60, pct: 50, pctPer: 60, sel: 'Max' },
+    down: { win: 300, pods: 1, podsPer: 60, pct: 25, pctPer: 60, sel: 'Min' }
+  },
+  aimA: 1, modeA: 'value', aimB: 0.7, seed: 1234 };
+/* Patterns are paced so the real HPA dampeners (15s sync, 300s down-window) have
+   time to react — a 1-minute burst is simply smoothed away by the stabilization window. */
+function rateFactor(t) {
+  switch (cfg.pattern) {
+    case 'steady':    return 1;
+    case 'ramp':      return t < 420 ? 0.15 + (t / 420) * 0.85 : 1;
+    case 'diurnal':   return 0.25 + 0.75 * Math.max(0, Math.sin(6.283185 * (t - 240) / 900)) ** 1.5;
+    case 'idleburst': return (t % 720) < 420 ? 0.05 : 2.4;
+  }
+  return 1;
+}
+
+/* ---------- event engine ---------- */
+let simNow = 0, evs = [], jobSeq = 0;
+let running = false, speed = 10, lastReal = 0;
+function schedule(ev) {
+  let lo = 0, hi = evs.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (evs[m].t <= ev.t) lo = m + 1; else hi = m; }
+  evs.splice(lo, 0, ev);
+}
+
+/* ---------- fleet ---------- */
+class Fleet {
+  constructor(side) {
+    this.side = side;                 // 'A' | 'B'
+    this.queue = [];                  // {id, arrive, arrive0, dur, requeues}
+    this.ux = [];                     // end-user samples: {t, old, p95} every 1s
+    this.soj = [];                    // sojourn (arrive0→done) of recent completions
+    this.pods = [];                   // {id, state:'start'|'run', term, slots:[null|slot], graceAt}
+    this.podSeq = 0;
+    this.recs = [];                   // {t, want} — EVERY unstabilized recommendation
+    this.series = [];                 // {t, pods, wants, rec, metric, spec}
+    this.logLines = [];               // newest first
+    this.gainedEv = [];               // HPA scale events: {t, n} (policy lookback windows)
+    this.lostEv = [];
+    this.spec = cfg.min;              // HPA's desired count (drain lags behind this)
+    this.lastWants = null; this.lastRec = null; this.lastApplied = null;
+    this.lastRatio = null; this.lastTol = false; this.lastHeld = '';
+    this.nextCheck = 0;
+    this.newlyArrived = 0;
+    this.arrSec = 0; this.rateEMA = 0;   // arrivals/s since last ux tick; smoothed jobs/min
+    this._chipSig = ''; this._podSig = ''; this._logSig = '';
+    this.maths = new Map(); this.mathSeq = 0;
+  }
+  aim()    { return this.side === 'A' ? cfg.aimA : cfg.aimB; }
+  live()   { return this.pods.filter(p => !p.term).length; }
+  busyOf(p){ return p.state === 'run' ? p.slots.reduce((a, s) => a + (s ? 1 : 0), 0) : 0; }
+  /* What the adapter returns, per k8s semantics.
+     External/Value → ONE series (the docs: "if multiple series match, their SUM is used"),
+       i.e. one global number, which is the whole problem with queue-derived metrics.
+     External/AverageValue → one series PER POD, which the controller SUMS.
+     sum = Σv fed to the formula; disp = the friendly number shown on the gauge. */
+  metric() {
+    if (this.side === 'A') {
+      const age = this.queue.length ? simNow - this.queue[0].arrive : 0;
+      return { sum: age, disp: age };
+    }
+    const sum = this.pods.reduce((a, p) => p.term ? a : a + this.busyOf(p) / SLOTS, 0);
+    const live = this.live();
+    return { sum, disp: live ? sum / live : 0 };
+  }
+  /* Per-type math, following replica_calculator.go:
+       Value:        ratio = Σv / target            → ceil(ratio × readyPods)
+       AverageValue: ratio = Σv / (target × status) → ceil(Σv / target)
+     Note AverageValue divides by scale.STATUS.replicas and Value by scale.SPEC.replicas,
+     and the ready-pod count (running+ready, so starting pods don't count yet) is what
+     Value multiplies by. The ±tolerance deadband is tested on the RATIO; at 0 replicas
+     tolerance is bypassed. */
+  recommend(mt, ready, status) {
+    const aim = this.aim();
+    if (this.side === 'A' && cfg.modeA === 'value') {
+      const ratio = mt.sum / aim;
+      if (this.spec === 0) return { want: Math.ceil(ratio), ratio, tol: false };
+      if (!this.outsideTol(ratio)) return { want: this.spec, ratio, tol: true };
+      return { want: Math.ceil(ratio * ready), ratio, tol: false };
+    }
+    if (status === 0) { const r = mt.sum / aim; return { want: Math.ceil(r), ratio: r, tol: false }; }
+    const ratio = mt.sum / (aim * status);
+    if (!this.outsideTol(ratio)) return { want: this.spec, ratio, tol: true };
+    return { want: Math.ceil(mt.sum / aim), ratio, tol: false };
+  }
+  outsideTol(r) { return r <= 1 - cfg.tol || r >= 1 + cfg.tol; }
+  /* k8s rate policies look back at the HPA's OWN scale events (not pod births —
+     startup delay means the pods lag the decision), to reconstruct the replica
+     count as it stood at the start of the policy period. */
+  podsGained(win) { return this.gainedEv.filter(e => e.t >= simNow - win).reduce((a, e) => a + e.n, 0); }
+  podsLost(win) { return this.lostEv.filter(e => e.t >= simNow - win).reduce((a, e) => a + e.n, 0); }
+  /* One behavior block → the replica limit it allows. Each of the two policies
+     reconstructs periodStartReplicas over ITS OWN periodSeconds (undoing its own
+     recent scale events), then selectPolicy picks between them. Min = the policy
+     that changes replicas the LEAST; Disabled = no movement in that direction. */
+  policyLimit(b, up, detail) {
+    if (b.sel === 'Disabled') return detail ? { lim: this.spec, why: 'Disabled' } : this.spec;
+    const start = Math.max(0, this.spec - this.podsGained(b.podsPer) + this.podsLost(b.podsPer));
+    const pLimit = up ? start + b.pods : Math.max(0, start - b.pods);
+    const qStart = Math.max(0, this.spec - this.podsGained(b.pctPer) + this.podsLost(b.pctPer));
+    const qLimit = up ? Math.ceil(qStart * (1 + b.pct / 100)) : Math.floor(qStart * (1 - b.pct / 100));
+    const takeMax = (b.sel === 'Max') === up;             // what selectPolicy picks
+    if (!detail) return takeMax ? Math.max(pLimit, qLimit) : Math.min(pLimit, qLimit);
+    const lim = takeMax ? Math.max(pLimit, qLimit) : Math.min(pLimit, qLimit);
+    const how = /* arithmetic trail for the log hover */
+      `start: ${this.spec} − ${this.podsGained(b.podsPer)} up + ${this.podsLost(b.podsPer)} down`
+      + ` (last ${b.podsPer}s) = ${start} → Pods: ${up ? start + ' + ' : start + ' − '}${b.pods} = ${pLimit}`
+      + ` · start: ${this.spec} − ${this.podsGained(b.pctPer)} up + ${this.podsLost(b.pctPer)} down`
+      + ` (last ${b.pctPer}s) = ${qStart} → Percent: ${up ? 'ceil(' + qStart + ' × (1+' + b.pct + '%))' : 'floor(' + qStart + ' × (1−' + b.pct + '%))'} = ${qLimit}`
+      + ` · selectPolicy ${b.sel} ⇒ ${lim}`;
+    return { lim, why: lim === pLimit ? `Pods ${b.pods}/${b.podsPer}s` : `Percent ${b.pct}%/${b.pctPer}s`, how };
+  }
+  recordScale(n) { const arr = n > 0 ? this.gainedEv : this.lostEv;
+                   if (n !== 0) arr.push({ t: simNow, n: Math.abs(n) });
+                   if (arr.length > 300) arr.splice(0, 150); }
+  /* ---- one reconciliation, in the controller's real order:
+       1 out-of-range short-circuit → 2 per-metric recommendation → 3 stabilization
+       (rolling MAX over the downscale window) → 4 rate policies → 5 min/max clamp ---- */
+  sync() {
+    const mt = this.mt || this.metric();     // LAST SCRAPE, not live state — see 'msample'
+    /* Deployment reconciliation: the ReplicaSet always keeps pod count at
+       spec.replicas — if drain took us under target, replacements appear here. */
+    if (this.pods.length < this.spec) { this.spawn(this.spec - this.pods.length); }
+    const ready = this.pods.filter(p => !p.term && p.state === 'run').length;
+    const status = this.pods.length;               // incl. draining pods, as status.replicas does
+    this.nextCheck = simNow + cfg.sync;
+    let want, ratio, tol;
+    if (this.spec > cfg.max || this.spec < cfg.min) {   // clamp, metrics not even consulted
+      want = Math.max(cfg.min, Math.min(cfg.max, this.spec)); ratio = NaN; tol = false;
+    } else {
+      const r = this.recommend(mt, ready, status);
+      want = r.want; ratio = r.ratio; tol = r.tol;
+    }
+    /* the recommendation is recorded EVERY sync, unstabilized, even on no-ops */
+    this.recs.push({ t: simNow, want });
+    const bh = cfg.beh;
+    const keep = Math.max(bh.up.win, bh.down.win, 1);
+    while (this.recs.length > 2 && this.recs[0].t < simNow - keep) this.recs.shift();
+    /* STABILIZATION — the big brake on scale-down: k8s takes the HIGHEST recommendation
+       in the window ("approximates a rolling maximum"), and the lowest for upscale.
+       It is clamped to the current count, so it can only restrain, never act by itself. */
+    let rec = this.spec;
+    let wMax = -Infinity, wMin = Infinity;
+    for (const r of this.recs) {
+      if (r.t >= simNow - bh.down.win) wMax = Math.max(wMax, r.want);
+      if (r.t >= simNow - bh.up.win)   wMin = Math.min(wMin, r.want);
+    }
+    let heldBy = '';
+    if (Number.isFinite(wMin) && rec < wMin) { rec = wMin; heldBy = 'up-window'; }
+    if (Number.isFinite(wMax) && rec > wMax) { rec = wMax; heldBy = 'down-window'; }
+    /* rate policies from spec.behavior. Each policy reconstructs periodStartReplicas
+       over ITS OWN periodSeconds, then selectPolicy picks Max or Min of the two.
+       The detail flavor also reports WHICH policy set the limit, for the log. */
+    const upD = this.policyLimit(bh.up, true, true);
+    const dnD = this.policyLimit(bh.down, false, true);
+    const maxLimit = Math.min(cfg.max, upD.lim), minLimit = Math.max(cfg.min, dnD.lim);
+    let applied = rec;
+    const bits = [];
+    if (heldBy) bits.push(heldBy === 'down-window' ? `${cfg.beh.down.win}s window` : `${cfg.beh.up.win}s window`);
+    if (applied > maxLimit) { applied = maxLimit; bits.push(`${upD.why} caps at ${maxLimit}`); }
+    else if (applied < minLimit) { applied = minLimit; bits.push(`${dnD.why} floors at ${minLimit}`); }
+    else if (rec > this.spec && applied === maxLimit) bits.push(`pinned by ${upD.why}`);
+    else if (rec < this.spec && applied === minLimit) bits.push(`pinned by ${dnD.why}`);
+    if (applied >= cfg.max && rec >= cfg.max) bits.push('maxReplicas');
+    if (applied <= cfg.min && rec <= cfg.min) bits.push('minReplicas');
+    /* k8s compares desired against spec.replicas (its own last target), NOT against
+       the pods still draining — otherwise a downscale would re-cull every sync while
+       the old pods are still terminating. spec lags; drain catches up to it. */
+    const from = this.spec, to = applied;
+    /* the hover card, in the controller's three phases. Friendly words FIRST,
+       the YAML field they come from underneath — the reader should leave the
+       hover knowing which manifest knob caused what. */
+    const band = Math.round(cfg.tol * 100);
+    const wx = v => Number.isFinite(v) ? v : '—';
+    const tgt = this.side === 'A'
+      ? `spec.metrics[].target: { type: ${cfg.modeA === 'value' ? 'Value' : 'AverageValue'}, value: ${cfg.aimA}s }`
+      : `spec.metrics[].target: { type: Utilization, averageUtilization: ${Math.round(cfg.aimB * 100)}% }`;
+    const sec = [];
+    let owner = 0;                   // which card gets "← this decided it"
+    /* ① desired from the scraped metric — spec.metrics[].target.
+       Each card: ONE plain-language takeaway first, numbers as evidence second. */
+    if (this.spec > cfg.max || this.spec < cfg.min) {
+      sec.push({ t: 'what the metric wants', k: tgt, v: want, tone: 'stop', L:
+        [`You already sit outside the fleet's hard limits (<span class="k">minReplicas: ${cfg.min}</span> to <span class="k">maxReplicas: ${cfg.max}</span>), so k8s just drags the count back to ${want} — <b>your metric is not even read this round.</b>`] });
+      owner = 1;
+    } else {
+      /* the canonical HPA formula, drawn in the same box style as card ②:
+         desiredReplicas = ceil[ currentReplicas × (current ÷ desired) ]
+         with this check's live numbers plugged into each box. */
+      const cr = this.side === 'A' && cfg.modeA === 'value' ? ready : status;
+      const prod = (this.side === 'A' && cfg.modeA === 'value') ? ratio * ready : mt.sum / this.aim();
+      const curLbl = this.side === 'A'
+        ? (cfg.modeA === 'value' ? 'oldest queued job' : `one wait ÷ ${status || '—'} pods`)
+        : 'mean slot fullness';
+      const curTxt = this.fmtM(this.side === 'A' && cfg.modeA !== 'value' ? mt.sum / (status || 1) : mt.disp);
+      const tgtTxt = this.side === 'A' ? `${cfg.aimA}s` : `${Math.round(cfg.aimB * 100)}%`;
+      const dir = tol || !isFinite(prod) ? 'same' : want > cr ? 'up' : want < cr ? 'down' : 'same';
+      const l = [
+        `<div class="eqrow">
+           <div class="fraceq gc1to5">
+             <span class="lhs"><i>desiredReplicas</i> = ceil&nbsp;[</span>
+             <span class="cbox"><i>currentReplicas</i><b>${cr}</b><em>${this.side === 'A' && cfg.modeA === 'value' ? 'readyPods' : 'status.replicas'}</em></span>
+             <span class="car">×</span>
+             <span class="frac">
+               <span class="num"><span class="cbox mid"><i>currentMetricValue</i><b>${curTxt}</b><em>${curLbl}</em></span></span>
+               <span class="fbar"></span>
+               <span class="den"><span class="cbox"><i>desiredMetricValue</i><b>${tgtTxt}</b><em>your target</em></span></span>
+             </span>
+             <span class="lhs">]</span>
+           </div>
+           <span class="car gc6">→</span>
+           <span class="cbox res gc7 ${dir}"><i>desiredReplicas</i><b>${tol ? this.spec : want}</b><em>${tol ? `±${band}% deadband` : 'ceil(' + (isFinite(prod) ? prod.toFixed(1) : '—') + ')'}</em></span>
+         </div>`];
+      if (this.side === 'A' && cfg.modeA === 'value') {
+        l.push(tol
+          ? `The oldest job in the queue is <b>${this.fmtM(mt.disp)}</b> deep — inside ±${band}% of the ${cfg.aimA}s target, so the ratio sits in the deadband and nothing moves.`
+          : `The whole queue is described by that single wait, and the formula multiplies it by every ready pod: ceil(${isFinite(prod) ? prod.toFixed(1) : '—'}) = <b>${want}</b>.`);
+      } else if (this.side === 'A') {
+        l.push(tol
+          ? `Spread over ${status} pods, the wait averages <b>${this.fmtM(mt.sum / (status || 1))}</b> — inside ±${band}% of ${cfg.aimA}s, so the deadband holds the fleet at ${this.spec}.`
+          : `<span class="k">AverageValue</span> wants a per-pod number, so the queue's single wait is divided across ${status} pods and multiplied back in: ceil(${isFinite(prod) ? prod.toFixed(1) : '—'}) = <b>${want}</b>.`);
+      } else {
+        l.push(tol
+          ? `Pods average <b>${this.fmtM(mt.disp)}</b> busy against a ${tgtTxt} target — inside ±${band}%, so the deadband holds the fleet at ${this.spec}.`
+          : `Each pod measures its own slots; ${this.fmtM(mt.disp)} is the average across ${status} of them. Work at target density fits in ceil(${isFinite(prod) ? prod.toFixed(1) : '—'}) = <b>${want}</b> pods.`);
+      }
+      sec.push({ t: 'what the metric wants', k: tgt, v: want, tone: tol ? 'stop' : '', L: l });
+      if (tol) owner = 1;
+    }
+    /* ② stabilization windows — behavior.{scaleUp,scaleDown}.stabilizationWindowSeconds.
+       Upstream: result starts at CURRENT; up-window MIN of recent desired lifts it,
+       down-window MAX ceilings it; the fresh reading enters only through those bounds. */
+    {
+      /* the clamp visual IS the lede: lower clamp · start · upper clamp → result,
+         with one plain sentence under it. The how-the-windows-work prose lives
+         in the page glossary instead. Upstream: result starts at CURRENT, the
+         up-window MIN of recent desired lifts it, the down-window MAX ceilings it. */
+      const dir = rec > from ? 'up' : rec < from ? 'down' : 'same';
+      /* row 1 = the memory pool itself: the recent desired counts, oldest →
+         newest, collapsed to runs so a steady 300s doesn't paint 10 chips.
+         The fresh wish visibly JOINS this pool — it is never clamped itself.
+         row 2 = what the pool emits (lowest/highest) clamping the fleet. */
+      /* ONE row of chips, newest → oldest, no run-collapsing: the pool holds
+         at most window/sync ≈ a dozen records. Dim = outside the up-window.
+         The lowest bright chip and the highest chip overall are what the two
+         windows extract — the drawn connectors point at those. */
+      const keep = Math.max(cfg.beh.up.win, cfg.beh.down.win, 1);
+      const pool = [];
+      for (const r of this.recs) {
+        if (r.t < simNow - keep) continue;
+        pool.push({ v: r.want, up: r.t >= simNow - cfg.beh.up.win, dn: r.t >= simNow - cfg.beh.down.win });
+      }
+      pool.reverse();                                 // newest first
+      const fresh = pool[0];
+      const ups = pool.filter(p => p.up), dns = pool.filter(p => p.dn);
+      const lo = ups.length ? ups.reduce((m, p) => p.v < m.v ? p : m) : null;   // min of up-window
+      const hi = dns.length ? dns.reduce((m, p) => p.v > m.v ? p : m) : null;   // max of down-window
+      const chip = p => {
+        const id = (lo !== hi && p === lo) ? ' id="chipL"' : (lo !== hi && p === hi) ? ' id="chipH"' : '';
+        return `<span${id} class="chip${p === fresh ? ' now' : ''}${p.up ? '' : ' dn'}">${p.v}</span>`;
+      };
+      const l = [
+        `<div class="poolrow">
+           <div class="poolhead">recent desired counts <span class="fine">· newest → oldest · dim = outside the ${cfg.beh.up.win}s up-window</span></div>
+           <div class="pool">${pool.map(chip).join('')}</div>
+         </div>
+         <div class="eqrow">
+           <span class="cbox gc1" data-clampto="lc"><i>lower clamp</i><b>${wx(wMin)}</b><em>lowest of the last ${cfg.beh.up.win}s</em></span>
+           <span class="car">≤</span>
+           <span class="cbox mid"><i>current pod count</i><b>${from}</b><em>what gets clamped</em></span>
+           <span class="car">≤</span>
+           <span class="cbox" data-clampto="uc"><i>upper clamp</i><b>${wx(wMax)}</b><em>highest of the last ${cfg.beh.down.win}s</em></span>
+           <span class="car">→</span>
+           <span class="cbox res ${dir}"><i>stabilizedCount</i><b>${rec}</b><em>${heldBy ? (heldBy === 'up-window' ? 'raised by lower clamp' : 'cut by upper clamp') : 'unchanged'}</em></span>
+         </div>`];
+      l.push(heldBy === 'up-window'
+        ? `Your fleet has <b>${from} pods</b>, which is below the lower clamp of ${wx(wMin)} — the result is raised to ${rec}.`
+        : heldBy === 'down-window'
+          ? `Your fleet has <b>${from} pods</b>, which is above the upper clamp of ${wx(wMax)} — the result is cut to ${rec}.`
+          : `Your fleet has <b>${from} pods</b>, which already sits between the two clamps — the result stays ${rec}.`);
+      l.push(`<span class="fine">the arrows show what each window extracted from the list: <b>lowest</b> bright value → lower clamp, <b>highest</b> value → upper clamp.</span>`);
+      sec.push({ t: 'what recent history allows', k: 'spec.behavior.scaleUp | scaleDown .stabilizationWindowSeconds', v: rec,
+                 tone: rec !== from ? 'hit' : (rec !== want ? 'stop' : 'pass'), L: l });
+    }
+    /* ③ rate policies — same big-number clamp shape as card ②:
+       floor ≤ desire ≤ ceiling → applied. The boxes show where each bound came
+       from (which policy, which min/maxReplicas), words only underneath. */
+    {
+      const dir3 = to > from ? 'up' : to < from ? 'down' : 'same';
+      const capped = applied !== rec ? (rec > maxLimit ? 'ceiling' : 'floor') : 'inside';
+      const l = [
+        /* two rows, columns that mean the same thing in both: the scaleDown
+           limit sits above the floor it feeds, the scaleUp limit above the
+           ceiling it feeds, the desire above the desire it becomes. */
+        `<div class="eqrow">
+           <span class="cell gc1"><span class="cbox"><i>scaleDown limit</i><b>${dnD.lim}</b><em>Pods ${cfg.beh.down.pods}/${cfg.beh.down.podsPer}s · Percent ${cfg.beh.down.pct}%/${cfg.beh.down.pctPer}s · selectPolicy ${cfg.beh.down.sel}</em></span><span class="drop">↓</span></span>
+           <span class="cell gc5"><span class="cbox"><i>scaleUp limit</i><b>${upD.lim}</b><em>Pods ${cfg.beh.up.pods}/${cfg.beh.up.podsPer}s · Percent ${cfg.beh.up.pct}%/${cfg.beh.up.pctPer}s · selectPolicy ${cfg.beh.up.sel}</em></span><span class="drop">↓</span></span>
+         </div>
+         <div class="eqrow">
+           <span class="cbox"><i>floor</i><b>${minLimit}</b><em>max(<span class="k">minReplicas ${cfg.min}</span>, scaleDown ${dnD.lim})</em></span>
+           <span class="car">≤</span>
+           <span class="cbox mid"><i>stabilizedCount · from ②</i><b>${rec}</b><em>what history allows</em></span>
+           <span class="car">≤</span>
+           <span class="cbox"><i>ceiling</i><b>${maxLimit}</b><em>min(<span class="k">maxReplicas ${cfg.max}</span>, scaleUp ${upD.lim})</em></span>
+           <span class="car">→</span>
+           <span class="cbox res ${dir3}"><i>applied</i><b>${to}</b><em>${capped === 'ceiling' ? 'capped by ceiling' : capped === 'floor' ? 'raised by floor' : 'desire was inside'}</em></span>
+         </div>`];
+      l.push(capped === 'ceiling'
+        ? `History points at ${rec}, the ceiling says ${maxLimit} at most this window — so the fleet moves ${to > from ? `up ${to - from}, and the rest of the wish waits for the next check` : `to ${to}`}.`
+        : capped === 'floor'
+          ? `History points at ${rec}, the floor says ${minLimit} at minimum — pods leave at the pace of <b>${dnD.why}</b>, no faster.`
+          : `The stabilized ${rec} sits inside ${minLimit}–${maxLimit}, so the speed limit doesn't bite: applied = ${to}.`);
+      l.push(`<span class="fine">arithmetic: ${upD.how} · ${dnD.how}</span>`);
+      sec.push({ t: 'how fast the fleet may move', k: 'spec.behavior.*.policies · selectPolicy · min/maxReplicas', v: to,
+                 tone: to !== from ? 'hit' : (applied !== rec ? 'stop' : 'pass'), L: l });
+    }
+    if (!owner) owner = applied !== rec ? 3 : (rec !== want ? 2 : (to !== from ? 3 : 0));
+    this.lastSecs = sec; this.lastOwner = owner;
+    /* the one-line story above the cards — the whole reconcile in a sentence */
+    this.lastVerdict = tol
+      ? `Nothing changes: the fleet is right-sized within ±${band}%. Most checks end exactly like this — a boring HPA is a working HPA.`
+      : to !== from
+        ? `The metric wants ${want} pods; you get ${to} — ${to > from ? `adding ${to - from}` : `removing ${from - to}`} this window. The distance between those numbers is your pod-change speed limit.`
+        : want === to
+          ? `Every stage agrees: ${to} pods is right.`
+          : `The metric says ${want}; the fleet stays at ${to}. ${owner === 2 ? `Recent history hasn't expired yet — stabilization pins the count while it lingers.` : owner === 3 ? `The speed limit for this window brackets the count at ${minLimit}–${maxLimit}.` : `Hard min/max limits decided it.`}`;
+    this.mathHead = `${fmtT(simNow)} · ` + (this.side === 'A'
+      ? (cfg.modeA === 'value' ? 'Fleet A — External / Value' : 'Fleet A — External / AverageValue')
+      : 'Fleet B — Pods / Utilization');
+    this.lastWants = want; this.lastRec = rec; this.lastApplied = applied;
+    this.lastRatio = ratio; this.lastTol = tol; this.lastHeld = heldBy;
+    if (to > from) {
+      const n = Math.max(0, to - this.pods.length);
+      if (n > 0) this.spawn(n);
+      this.recordScale(to - from);
+    } else if (to < from) {
+      const cull = this.pods.filter(p => !p.term)
+        .sort((x, y) => this.busyOf(x) - this.busyOf(y)).slice(0, this.pods.length - to);
+      if (cull.length) { this.terminate(cull); this.recordScale(to - from); }
+    }
+    this.spec = to;
+    this.trace(from, to, mt, ratio, tol, bits);
+    this.series.push({ t: simNow, pods: this.live(), wants: want, rec, metric: mt.disp, spec: to });
+    if (this.series.length > SPAN * 30) this.series.splice(0, 2000);
+  }
+  /* ONE log line per reconciliation — every poll loop shows its work, including
+     the no-ops (most of them): scraped metric → raw want → stabilized → applied,
+     and WHY (deadband / stabilization window / which behavior policy bound it). */
+  trace(from, to, mt, ratio, tol, bits) {
+    const aimTxt = this.side === 'A' ? `${cfg.aimA}s` : `${Math.round(cfg.aimB * 100)}%`;
+    const dir = to > from ? 'up' : to < from ? 'down' : 'info';
+    if (tol) bits.push('deadband');
+    /* want ≠ result with no other explanation ⇒ the stabilization window held it */
+    if (this.lastWants !== to && !bits.length) bits.push('window');
+    /* "wants N" only earns its place when N ≠ what we ended up at; the result
+       appears once — "N → M" when it moves, "stays N" when it doesn't */
+    const wantTxt = this.lastWants !== to ? `wants ${this.lastWants} → ` : '';
+    const res = to !== from ? `${from} → <b>${to}</b>` : `stays <b>${to}</b>`;
+    const seq = ++this.mathSeq;
+    const secs = (this.lastSecs || []).map((s, i) =>
+      `<div class="psec ${s.tone}${i + 1 === this.lastOwner ? ' owner' : ''}">`
+      + `<div class="ph"><i>${s.t}${i + 1 === this.lastOwner ? ' <span class="own">← decided it</span>' : ''}</i><b>${s.v}</b></div>`
+      + `<div class="pk">${s.k || ''}</div>`
+      + `<div class="pb">${s.L.join('<br>')}</div></div>`).join('');
+    this.maths.set(seq, `<span class="mh">HPA check · ${this.mathHead}</span>`
+      + `<div class="verdict">${this.lastVerdict || ''}</div>` + secs);
+    if (this.maths.size > 350) this.maths.delete(this.maths.keys().next().value);
+    this.logLines.unshift(`<span class="t">${fmtT(simNow)}</span><span class="${dir} hl" data-m="${seq}">hpa: ${this.fmtM(mt.disp)} vs aim ${aimTxt} → `
+      + `${wantTxt}${res}${bits.length ? ' (' + bits.join(', ') + ')' : ''}</span>`);
+    if (this.logLines.length > 300) this.logLines.length = 300;
+  }
+  fmtM(m) { return this.side === 'A' ? `${m.toFixed(1)}s` : `${Math.round(m * 100)}%`; }
+  /* prewarm=true for the baseline min-replica pods: the fleet sits Ready at t=0,
+     exactly like a deployment that has been running its floor for a while.
+     Scale-up pods still pay the startup delay — that's the story when HPA acts. */
+  spawn(n, prewarm) {
+    for (let k = 0; k < n; k++) {
+      const p = { id: ++this.podSeq, state: prewarm ? 'run' : 'start', term: false, born: simNow, slots: new Array(SLOTS).fill(null) };
+      this.pods.push(p);
+      p.pollTok = { dead: true };
+      if (!prewarm) schedule({ t: simNow + cfg.startup, kind: 'ready', f: this, p });
+      else this.schedulePoll(p);                        // baseline workers are already polling
+    }
+  }
+  ready(p) { if (this.pods.includes(p)) { p.state = 'run'; this.schedulePoll(p); } }
+  terminate(list) {
+    for (const p of list) {
+      p.term = true;
+      const busy = this.busyOf(p);
+      if (busy === 0 || p.state !== 'run') { this.drop(p); continue; }
+      p.graceAt = simNow + cfg.grace;
+      schedule({ t: p.graceAt, kind: 'grace', f: this, p });
+    }
+  }
+  graceExpire(p) {
+    if (!this.pods.includes(p)) return;
+    let n = 0;
+    for (let i = 0; i < SLOTS; i++) {
+      const s = p.slots[i]; if (!s) continue;
+      s.dead = true;                                  // its 'complete' event is now stale
+      n++; s.job.requeues = (s.job.requeues || 0) + 1;
+      s.job.arrive = simNow;                          // requeued: wait clock restarts
+      this.queue.push(s.job);
+      p.slots[i] = null;
+    }
+    this.drop(p);
+    if (n) this.logLines.unshift(`<span class="t">${fmtT(simNow)}</span><span class="kill">pod-${p.id} killed at grace — ${n} job(s) requeued</span>`);
+  }
+  drop(p) { const k = this.pods.indexOf(p); if (k >= 0) this.pods.splice(k, 1); }
+  /* ---- work: pull model ----
+     Jobs ONLY enter the fleet through a pod's own poll tick. Arrivals sit in the
+     queue until some pod's timer fires and claims one job. No push, no instant
+     hand-off — the queue wait the metric reads includes real pickup latency. */
+  receive(job) { this.queue.push(job); this.newlyArrived++; this.arrSec++; }
+  schedulePoll(p) {
+    if (p.pollTok) p.pollTok.dead = true;               // one pending poll per pod
+    const tok = { dead: false };
+    p.pollTok = tok;
+    schedule({ t: simNow + cfg.poll * (0.5 + rnd()), kind: 'poll', f: this, p, tok });
+  }
+  pull(p, tok) {
+    if (tok.dead || !this.pods.includes(p) || p.term || p.state !== 'run') return;
+    let free = 0;
+    for (let i = 0; i < SLOTS; i++) if (!p.slots[i]) free++;
+    if (free && this.queue.length) {
+      const job = this.queue.shift();                   // this worker wins the job
+      let i = 0; while (p.slots[i]) i++;
+      const slot = { job, end: simNow + job.dur };
+      p.slots[i] = slot;
+      schedule({ t: slot.end, kind: 'complete', f: this, p, i, slot });
+    }
+    this.schedulePoll(p);
+  }
+  complete(p, i, slot) {
+    if (slot.dead || p.slots[i] !== slot) return;     // stale event (pod killed mid-job)
+    this.soj.push({ t: simNow, v: simNow - slot.job.arrive0 });  // user turnaround: submit → done
+    if (this.soj.length > 500) this.soj.splice(0, 250);
+    p.slots[i] = null;
+    if (p.term && p.slots.every(x => !x)) this.drop(p);
+    else if (this.queue.length && !p.term && p.state === 'run') this.pull(p, p.pollTok);
+  }
+  /* end-user sample, 1× per second of sim time — reads the queue directly,
+     NOT through polls/scrapes, so it's what a dashboard polling the queue
+     backend itself would show. old = worst wait right now (from ORIGINAL
+     submit, so a kill/requeue penalty counts); p95 = turnaround of jobs
+     that finished in the last 2 min. */
+  uxSample() {
+    let old = 0;
+    for (const j of this.queue) old = Math.max(old, simNow - j.arrive0);
+    const win = this.soj.filter(s => s.t >= simNow - 120).map(s => s.v).sort((a, b) => a - b);
+    const p95 = win.length ? win[Math.min(win.length - 1, Math.floor(0.95 * win.length))] : 0;
+    /* arrival rate: instantaneous jobs/min this tick, EMA-smoothed (~30s) so the
+       line reads as load, not Poisson static */
+    this.rateEMA += ((this.arrSec * 60) - this.rateEMA) * 0.06;
+    this.arrSec = 0;
+    this.ux.push({ t: simNow, old, p95, rate: this.rateEMA });
+    while (this.ux.length > 2 && this.ux[0].t < simNow - 7200) this.ux.shift();   // keep max window
+  }
+}
+
+/* ---------- world ---------- */
+const F = {};
+function worldReset() {
+  simNow = 0; evs = []; jobSeq = 0;
+  resetRng(cfg.seed);
+  F.A = new Fleet('A'); F.B = new Fleet('B');
+  for (const f of [F.A, F.B]) {
+    f.spawn(cfg.min, true);
+    f.mt = f.metric();                             // pods are up at t=0, first scrape has data
+    f.sync();
+    schedule({ t: cfg.sync, kind: 'sync', f });
+    schedule({ t: cfg.metWin, kind: 'msample', f });   // metrics-server scrape cadence
+    schedule({ t: 1, kind: 'ux', f });                 // end-user stopwatch, 1s ticks
+  }
+  scheduleNextArrival();
+  renderAll(true);
+}
+function scheduleNextArrival() {                       // one master Poisson chain (thinned)
+  const peak = cfg.rate * 2.5;
+  let t = simNow;
+  for (let g = 0; g < 1e6; g++) {
+    t += -60 / peak * Math.log(1 - rnd());
+    if (rnd() < rateFactor(t) / 2.5) { schedule({ t, kind: 'arrive', master: true }); return; }
+  }
+}
+function burst(n) {                                    // one-shot: does NOT fork the chain
+  for (let i = 0; i < n; i++) schedule({ t: simNow + i * 0.05, kind: 'arrive' });
+}
+function advance(dt) {
+  const until = simNow + dt;
+  while (evs.length && evs[0].t <= until) {
+    const e = evs.shift(); simNow = e.t;
+    switch (e.kind) {
+      case 'arrive': {
+        const j = { id: ++jobSeq, arrive: e.t, arrive0: e.t, dur: lognormal(cfg.dur, cfg.sigma) };
+        F.A.receive({ ...j }); F.B.receive(j);
+        if (e.master) scheduleNextArrival();           // bursts must not fork new streams
+        break;
+      }
+      case 'complete': e.f.complete(e.p, e.i, e.slot); break;
+      case 'ready':    e.f.ready(e.p); break;
+      case 'poll':     e.f.pull(e.p, e.tok); break;
+      case 'grace':    e.f.graceExpire(e.p); break;
+      case 'ux':       e.f.uxSample(); schedule({ t: simNow + 1, kind: 'ux', f: e.f }); break;
+      case 'sync':     e.f.sync(); schedule({ t: simNow + cfg.sync, kind: 'sync', f: e.f }); break;
+      /* metrics-server scrape: the HPA only ever sees the LAST scraped value,
+         so between scrapes its reading is stale — up to metWin seconds of it. */
+      case 'msample':  e.f.mt = e.f.metric();
+                       schedule({ t: simNow + cfg.metWin, kind: 'msample', f: e.f }); break;
+    }
+  }
+  simNow = until;
+}
+
+/* ---------- rendering ---------- */
+const $ = id => document.getElementById(id);
+const fmtT = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+let SPAN = 900;   // graph window (s) — the "window" selector retunes it live
+
+function spark(cv, series, key, col, step) {
+  if (!cv) return;
+  const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = 92;
+  if (!w) return;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+  const t1 = Math.max(SPAN, simNow), t0 = t1 - SPAN;
+  const vis = series.filter(s => s.t >= t0); if (!vis.length) return;
+  /* auto-range to the visible window (always including the aim line and the
+     configured floor) — unless dataset.fixed pins the axis to floor…ceil */
+  const vals = vis.map(s => s[key]);
+  if (cv.dataset.grey) for (const s of vis) if (Number.isFinite(s[cv.dataset.grey])) vals.push(s[cv.dataset.grey]);
+  const dash = cv.dataset.dash ? +cv.dataset.dash : null;
+  let yMin, yMax;
+  if (cv.dataset.fixed) {                              // anchored axis: exactly floor…ceil
+    yMin = +cv.dataset.floor || 0; yMax = +cv.dataset.ceil;
+  } else {
+    yMin = Math.min(...vals, ...(dash !== null ? [dash] : []),
+                    ...(cv.dataset.floor ? [+cv.dataset.floor] : []));
+    yMax = Math.max(...vals, ...(dash !== null ? [dash] : []),
+                    ...(cv.dataset.ceil ? [+cv.dataset.ceil] : []));
+  }
+  const minSpan = +cv.dataset.span || 0;               // keep a flat line from being degenerate
+  if (yMax - yMin < minSpan) { const mid = (yMax + yMin) / 2; yMin = mid - minSpan / 2; yMax = mid + minSpan / 2; }
+  if (cv.dataset.fixed) {                              // anchored axis: no auto-pad
+    cv.dataset.yMin = yMin.toFixed(1); cv.dataset.yMax = yMax.toFixed(1);
+  } else {
+    const pad = (yMax - yMin) * 0.14;
+    yMin = Math.max(0, yMin - pad); yMax += pad;
+    cv.dataset.yMin = yMin.toFixed(1); cv.dataset.yMax = yMax.toFixed(1);
+  }
+  const X = t => (t - t0) / SPAN * w,
+        Y = v => h - 4 - (Math.min(Math.max(v, yMin), yMax) - yMin) / (yMax - yMin) * (h - 10);
+  if (dash !== null) {                                 // dashed reference line at aim
+    c.strokeStyle = '#223047'; c.setLineDash([3, 3]); c.beginPath();
+    c.moveTo(0, Y(+cv.dataset.dash)); c.lineTo(w, Y(+cv.dataset.dash)); c.stroke(); c.setLineDash([]);
+  }
+  /* ghost series (grey, behind): what the HPA wanted before window/policies cut
+     it — dataset.grey names the field, e.g. "want". Clipped by the axis: want
+     riding the top edge IS the cap being pinned. */
+  if (cv.dataset.grey) {
+    const gk = cv.dataset.grey;
+    c.beginPath(); let gs = false, gp = 0;
+    for (const s of vis) { if (!Number.isFinite(s[gk]) || (!cv.dataset.greyall && s[gk] === s.pods)) continue;
+      const y = Y(s[gk]);
+      gs ? (c.lineTo(X(s.t), gp), c.lineTo(X(s.t), y)) : (c.moveTo(X(s.t), y), gs = true); gp = y; }
+    c.strokeStyle = cv.dataset.greycol || 'rgba(148,163,184,.55)'; c.lineWidth = 1.2; c.stroke();
+  }
+  c.beginPath(); let st = false, prev = 0;
+  for (const s of vis) { const y = Y(s[key]);
+    st ? (step ? (c.lineTo(X(s.t), prev), c.lineTo(X(s.t), y)) : c.lineTo(X(s.t), y))
+       : (c.moveTo(X(s.t), y), st = true); prev = y; }
+  c.strokeStyle = col; c.lineWidth = 1.6; c.stroke();
+  /* rate overlay (dataset.rate): own scale on the same canvas — jobs/min
+     shares nothing with seconds, so it's drawn against its own max. Drawn
+     last so it stays readable under the wait lines. */
+  if (cv.dataset.rate) {
+    const rk = cv.dataset.rate;
+    const rr = vis.map(s => s[rk] || 0).sort((a, b) => a - b);
+    const rp = rr[Math.min(rr.length - 1, Math.floor(0.98 * rr.length))];   // trim 1s Poisson spikes
+    const rmax = Math.max(10, rp * 1.25);
+    cv.dataset.rMax = rmax.toFixed(0);
+    c.beginPath(); let rs = false;
+    for (const s of vis) { const y = h - 4 - Math.min(1, (s[rk] || 0) / rmax) * (h - 10);
+      rs ? c.lineTo(X(s.t), y) : (c.moveTo(X(s.t), y), rs = true); }
+    c.strokeStyle = 'rgba(91,157,255,.8)'; c.lineWidth = 1.3; c.stroke();
+  }
+}
+function gauge(f) {
+  const m = (f.mt || f.metric()).disp, aim = f.aim();
+  const ratio = m / aim;
+  /* bar domain: A = ratio 0…3×aim ; B = fullness 0…100% (never exceeds 100) */
+  const dom = f.side === 'A' ? 3 : 1 / aim;             // in ratio units
+  const lo = (1 - cfg.tol) / dom * 100, hi = (1 + cfg.tol) / dom * 100;
+  const tick = 1 / dom * 100;                            // where the target itself sits
+  const el = $(`gf${f.side}`);
+  el.style.width = Math.min(100, ratio / dom * 100).toFixed(1) + '%';
+  /* fill colour = the action this reading would trigger: outside the deadband
+     on the high side → blue (scale up), on the low side → red (scale down) */
+  el.classList.toggle('hot', ratio >= 1 + cfg.tol);
+  el.classList.toggle('cold', ratio <= 1 - cfg.tol);
+  $(`gt${f.side}`).style.left = tick.toFixed(1) + '%';
+  $(`gz${f.side}n`).style.right = (100 - lo).toFixed(1) + '%';
+  $(`gz${f.side}h`).style.left = lo.toFixed(1) + '%';
+  $(`gz${f.side}h`).style.width = (hi - lo).toFixed(1) + '%';
+  $(`gz${f.side}u`).style.left = hi.toFixed(1) + '%';
+  $(`gs${f.side}`).innerHTML =
+    `<i style="left:${(lo / 2).toFixed(1)}%">scale down</i>`
+    + `<i style="left:${((lo + hi) / 2).toFixed(1)}%">deadband ±${Math.round(cfg.tol * 100)}%</i>`
+    + `<i style="left:${((100 + hi) / 2).toFixed(1)}%">scale up</i>`;
+  $(`gv${f.side}`).textContent = f.side === 'A' ? m.toFixed(1) + 's' : Math.round(m * 100) + '%';
+}
+function drawFleet(f, force) {
+  const side = f.side, qn = f.queue.length, oldest = qn ? simNow - f.queue[0].arrive : 0;
+  $(`qn${side}`).textContent = qn;
+  /* oldest-wait readout with a short hold: at 10× the queue flickers between 0
+     and 1 several times a second, so instead of strobing — ⇄ 00:00, freeze the
+     last real reading, fade it, and fade out "—" only after a beat */
+  const qo = $(`qo${side}`);
+  if (qn) f._oldestAt = simNow;
+  const hold = qn || (f._oldestAt !== undefined && simNow - f._oldestAt < 6);
+  /* while holding, the number may only tick upward — a fresh arrival shouldn't
+     snap it back to 00:00 a second later; the counter resets when the hold expires */
+  f._showOldest = hold ? Math.max(f._showOldest || 0, oldest) : 0;
+  const txt = hold ? fmtT(f._showOldest) : '—';
+  if (qo.textContent !== txt) qo.textContent = txt;
+  qo.classList.toggle('empty', !hold);
+  qo.classList.toggle('stale', !qn && hold);
+  if (f.newlyArrived) {
+    const a = $(`arr${side}`);
+    a.textContent = `+${f.newlyArrived} arrived`;
+    a.classList.remove('flash'); void a.offsetWidth; a.classList.add('flash');
+    f.newlyArrived = 0;
+  }
+  /* chips: plain squares, first = next up, pink = requeued */
+  const shown = f.queue.slice(0, 42);
+  const csig = shown.map(j => j.id + ':' + (j.requeues || 0)).join(',');
+  if (csig !== f._chipSig || force) {
+    const prevIds = new Set((f._chipSig || '').split(',').map(s => +s.split(':')[0]));
+    $(`chips${side}`).innerHTML = shown.map(j =>
+      `<div class="chip${j.requeues ? ' rq' : ''}${j.id === shown[0].id ? ' next' : ''}${prevIds.size && !prevIds.has(j.id) ? ' land' : ''}"></div>`
+    ).join('') + (qn > 42 ? `<div class="chip more">+${qn - 42}</div>` : '');
+    f._chipSig = csig;
+  }
+  /* pods — rack holds maxReplicas cells; resizing it is a YAML change, not sim churn */
+  const CAP = Math.max(1, cfg.max);
+  const rack = $(`pods${side}`);
+  const rows = Math.ceil(CAP / 4);
+  if (+rack.style.getPropertyValue('--rows') !== rows) rack.style.setProperty('--rows', rows);
+  const psig = CAP + '|' + f.pods.map(p => `${p.id}:${p.state}${p.term ? 'T' : ''}:${p.term ? Math.max(0, Math.ceil(p.graceAt - simNow)) : 0}:${f.busyOf(p)}`).join(',');
+  if (psig !== f._podSig || force) {
+    const shown = f.pods.slice(0, CAP), extra = f.pods.length - shown.length;
+    const cell = p => {
+      const cls = p.term ? 'term' : p.state === 'start' ? 'starting' : '';
+      const busy = f.busyOf(p);
+      const glyph = p.term ? ['↓', 'term'] : p.state === 'start' ? ['↑', 'start'] : busy ? ['▶', 'proc'] : ['◦', ''];
+      const title = p.term ? `shutting down · ${Math.max(0, Math.ceil(p.graceAt - simNow))}s grace left`
+        : p.state === 'start' ? 'starting up' : busy ? 'processing' : 'idle, no work';
+      return `<div class="pod ${cls}" title="${title}"><div class="phead"><span class="glyph ${glyph[1]}">${glyph[0]}</span><span><b>${busy}/${SLOTS}</b></span></div>` +
+        `<div class="slots">${p.slots.map(s => `<div class="slot${s ? s.job.requeues ? ' busy rq' : ' busy' : ''}"></div>`).join('')}</div></div>`;
+    };
+    $(`pods${side}`).innerHTML = extra
+      ? shown.slice(0, CAP - 1).map(cell).join('')
+        + `<div class="pod ghost">+${extra} more</div>`
+      : shown.map(cell).join('') + '<div class="pod ghost"></div>'.repeat(CAP - shown.length);
+    f._podSig = psig;
+  }
+  gauge(f);
+  /* next-check countdown: column drains from full to empty each sync period */
+  const left = Math.max(0, f.nextCheck - simNow);
+  $(`nxf${side}`).style.height = (Math.min(1, left / cfg.sync) * 100).toFixed(1) + '%';
+  $(`nxn${side}`).textContent = Math.ceil(left) + 's';
+  $(`nxt${side}`).title = `next HPA check in ${Math.ceil(left)}s · period ${cfg.sync}s`;
+  const aimTxt = side === 'A' ? `${cfg.aimA}s` : `${Math.round(cfg.aimB * 100)}%`;
+  $(side === 'A' ? 'gkA' : 'gkB').textContent =
+    (side === 'A' ? 'task wait in line (s)' : 'slot fullness') + ` · aim ${aimTxt}`;
+  /* sparklines: pods on a fixed 0…maxReplicas axis; metric as ratio to aim,
+     dashed line at aim (=1), auto-ranged (A shows ratio 0 — age collapsing IS the story) */
+  const pv = $('chP_' + side), mv = $('chM_' + side);
+  delete pv.dataset.dash;
+  /* pods: Y anchored at 0 … maxReplicas, so the graph reads against the actual
+     replica envelope and both fleets share the same scale */
+  pv.dataset.floor = 0; pv.dataset.ceil = cfg.max; pv.dataset.fixed = 1;
+  pv.dataset.grey = 'want';   // ghost: raw recommendation the HPA wanted
+  mv.dataset.dash = 1;
+  mv.dataset.span = side === 'A' ? 0.6 : 0.35;
+  if (side === 'A') { mv.dataset.floor = 0; delete mv.dataset.ceil; }
+  else { delete mv.dataset.floor; mv.dataset.ceil = 1.6; }
+  const stepSeries = f.series.map(s => ({ t: s.t, pods: s.pods, want: s.wants, mratio: s.metric / f.aim() }));
+  spark(pv, stepSeries, 'pods', getComputedStyle(document.documentElement).getPropertyValue('--blue'), true);
+  spark(mv, stepSeries, 'mratio', side === 'A'
+    ? getComputedStyle(document.documentElement).getPropertyValue('--orange')
+    : getComputedStyle(document.documentElement).getPropertyValue('--green'), false);
+  /* end-user chart: what a client watching the queue itself would see —
+     red = WORST live wait right now (original submit time, so a kill+requeue
+     penalty shows as a jump), orange = p95 turnaround of jobs finishing in
+     the last 2 min. Independent of poll/scrape cadence. Both sides share one
+     axis (uxCeil from renderAll) so the fleets are directly comparable. */
+  const uv = $('chU_' + side);
+  delete uv.dataset.dash; delete uv.dataset.span;
+  uv.dataset.fixed = 1; uv.dataset.floor = 0; uv.dataset.ceil = window._uxCeil || 60;
+  uv.dataset.grey = 'p95'; uv.dataset.greyall = 1;
+  uv.dataset.greycol = getComputedStyle(document.documentElement).getPropertyValue('--orange');
+  const uxS = f.ux.map(s => ({ t: s.t, pods: s.old, p95: s.p95, rate: s.rate }));
+  uv.dataset.rate = 'rate';   // blue arrivals/min line, own scale (see spark())
+  spark(uv, uxS, 'pods', getComputedStyle(document.documentElement).getPropertyValue('--red'), false);
+  const rng = (cv, d) => {
+    const a = parseFloat(cv.dataset.yMin), b = parseFloat(cv.dataset.yMax);
+    return Number.isFinite(a) && Number.isFinite(b) ? `${a.toFixed(d)}–${b.toFixed(d)}` : '—';
+  };
+  $(`ctP_${side}`).innerHTML = `pods · scale ${rng(pv, 0)} `
+    + `<span style="color:#64748b">— grey = wanted</span>`;
+  $(`ctM_${side}`).textContent = (side === 'A' ? 'wait ÷ aim' : 'fullness ÷ aim')
+    + ` · dashed = aim · scale ${rng(mv, 1)}×`;
+  $(`ctU_${side}`).innerHTML = `end-user: <b class="r">worst live wait</b> · `
+    + `<b class="o">p95 turnaround</b> · scale ${rng(uv, 0)}s · `
+    + `<b class="b">arrivals</b> ${uv.dataset.rMax || '–'}/min`;
+  /* log — terminal order (oldest top, newest bottom) with scrollback.
+     Autoscroll pins to newest unless reading history: scrolled up while the
+     mouse is inside the box, or within 5s of the pointer leaving it. */
+  const lg = $(`log${side}`);
+  if (f.logLines.length + '|' + (f.logLines[0] || '') !== f._logSig || force) {
+    const paused = lg._scrolledUp && lg._hover;   // _hover = inside OR in the 5s grace
+    lg.innerHTML = f.logLines.slice().reverse().join('<br>');
+    if (!paused) lg.scrollTop = lg.scrollHeight;
+    f._logSig = f.logLines.length + '|' + (f.logLines[0] || '');
+  }
+}
+function renderAll(force) {
+  $('clock').textContent = `t ${fmtT(simNow)}`;
+  /* one shared seconds-axis for both end-user graphs: fleets differ in HOW
+     long users wait, so the comparison only works on identical scales */
+  const t0 = Math.max(0, Math.max(SPAN, simNow) - SPAN);
+  let mx = 60;
+  for (const f of [F.A, F.B]) for (const s of f.ux)
+    if (s.t >= t0) mx = Math.max(mx, s.old, s.p95);
+  window._uxCeil = Math.ceil(mx * 1.1 / 30) * 30;   // tidy steps: 60/90/120…
+  drawFleet(F.A, force); drawFleet(F.B, force);
+}
+function frame(ts) {
+  if (running) {
+    if (!lastReal) lastReal = ts;
+    advance(Math.min(0.1, (ts - lastReal) / 1000) * speed);
+    lastReal = ts; renderAll();
+  } else lastReal = 0;
+  requestAnimationFrame(frame);
+}
+
+/* ---------- UI ---------- */
+$('btnPlay').onclick = () => {
+  running = !running;
+  $('btnPlay').textContent = running ? '⏸ pause' : '▶ run';
+};
+$('btnReset').onclick = worldReset;
+$('btnSkip').onclick = () => {                  // jump ahead without rendering each frame
+  const target = simNow + 300;
+  while (simNow < target) advance(Math.min(5, target - simNow));
+  renderAll(true);
+};
+$('btnCfg').onclick = () => $('cfgBar').classList.toggle('open');
+$('btnBurst').onclick = () => burst(Math.max(1, +$('inpBurst').value || 0));
+$('btnDice').onclick = () => { $('inpSeed').value = Math.floor(Math.random() * 1e6); sync(); worldReset(); };
+$('selSpeed').onchange = () => { speed = +$('selSpeed').value; };
+function sync() {
+  cfg.pattern = $('selPattern').value;
+  cfg.rate = Math.max(1, +$('inpRate').value || 80);
+  cfg.dur = Math.max(0.5, +$('inpDur').value || 30);
+  cfg.sigma = Math.max(0, +$('inpSigma').value ?? 0.6);
+  cfg.min = Math.max(0, +$('yMin').value || 0);
+  cfg.max = Math.min(20, Math.max(cfg.min + 1, +$('yMax').value || 12));
+  cfg.sync = Math.max(1, +$('ySync').value || 30);
+  cfg.metWin = Math.max(1, +$('yMetWin').value || 60);   // metrics-server window, ≥ sync ⇒ repeats
+  cfg.startup = Math.max(0, +$('inpStart').value ?? 5);
+  cfg.grace = Math.max(0, +$('inpGrace').value ?? 30);
+  cfg.poll = Math.max(0.05, +$('inpPoll').value ?? 1);
+  cfg.beh.up   = { win: +$('yUpWin').value || 0,  pods: Math.max(0, +$('yUpPods').value || 0),
+                   podsPer: Math.max(1, +$('yUpPodsPer').value || 60),
+                   pct: Math.max(0, +$('yUpPct').value || 0),
+                   pctPer: Math.max(1, +$('yUpPctPer').value || 60), sel: $('yUpSel').value };
+  cfg.beh.down = { win: Math.max(0, +$('yDnWin').value ?? 300), pods: Math.max(0, +$('yDnPods').value || 0),
+                   podsPer: Math.max(1, +$('yDnPodsPer').value || 60),
+                   pct: Math.max(0, +$('yDnPct').value || 0),
+                   pctPer: Math.max(1, +$('yDnPctPer').value || 60), sel: $('yDnSel').value };
+  cfg.aimA = Math.max(0.1, +$('inpTA').value || 1);
+  cfg.modeA = $('selModeA').value;
+  cfg.aimB = Math.min(0.99, Math.max(0.05, (+$('inpTB').value || 70) / 100));
+  cfg.seed = Math.floor(+$('inpSeed').value) || 1;
+}
+for (const id of ['inpRate','inpDur','inpSigma','inpStart','inpPoll','inpGrace','inpTA','inpTB','inpSeed','selPattern','selModeA',
+                  'yMin','yMax','ySync','yMetWin','yUpWin','yUpPods','yUpPodsPer','yUpPct','yUpPctPer','yUpSel',
+                  'yDnWin','yDnPods','yDnPodsPer','yDnPct','yDnPctPer','yDnSel'])
+  $(id).addEventListener('change', () => { sync(); worldReset(); });
+addEventListener('resize', () => renderAll(true));
+$('selSpan').addEventListener('change', () => { SPAN = +$('selSpan').value || 900; renderAll(true); });
+/* log scrollback: hover freezes the auto-scroll; leaving starts a 5s countdown.
+   scrolling up (or hovering) shows the ⏸ glyph; scrolling back to the bottom or
+   clicking the glyph resumes. */
+for (const side of ['A', 'B']) {
+  const lg = $(`log${side}`), glyph = $(`p${side}`);
+  const paused = () => !!(lg._scrolledUp && lg._hover);
+  const refresh = () => {
+    const on = paused();
+    glyph.classList.toggle('on', on);
+    /* while the pointer is away, the glyph counts down to auto-resume */
+    if (on && !lg._inside) {
+      const left = Math.max(0, Math.ceil((lg._until - Date.now()) / 1000));
+      glyph.textContent = `⏸ ${left}s`;
+    } else glyph.textContent = '⏸ resume';
+  };
+  const tick = () => {
+    if (Date.now() >= lg._until) { lg._hover = false; clearInterval(lg._tick); lg._tick = 0; }
+    refresh();
+    if (!lg._tick && paused()) lg._tick = setInterval(tick, 250);   // keep it alive while still reading
+  };
+  lg.addEventListener('mouseenter', () => {
+    lg._inside = lg._hover = true;
+    clearInterval(lg._tick); lg._tick = 0;
+    refresh();
+  });
+  lg.addEventListener('mouseleave', () => {
+    lg._inside = false;
+    lg._until = Date.now() + 5000;
+    refresh();
+    if (!lg._tick) lg._tick = setInterval(tick, 250);
+  });
+  lg.addEventListener('scroll', () => {
+    lg._scrolledUp = lg.scrollHeight - lg.scrollTop - lg.clientHeight > 8;
+    /* scrolling while away restarts the grace — the reader is clearly still there */
+    if (!lg._inside && lg._scrolledUp && lg._hover) lg._until = Date.now() + 5000;
+    refresh();
+  }, { passive: true });
+  glyph.onclick = () => { lg._hover = false; lg._scrolledUp = false;
+                         clearInterval(lg._tick); lg._tick = 0;
+                         lg.scrollTop = lg.scrollHeight; refresh(); };
+}
+/* log hover: show the full replica-math derivation for that reconciliation */
+const tip = $('mathTip');
+for (const side of ['A', 'B']) {
+  const lg = $(`log${side}`);
+  lg.addEventListener('mousemove', e => {
+    const h = e.target.closest && e.target.closest('.hl');
+    if (!h || !h.dataset.m) { tip.style.display = 'none'; return; }
+    const m = F[side].maths.get(+h.dataset.m);
+    if (!m) { tip.style.display = 'none'; return; }
+    tip.innerHTML = m;
+    tip.style.display = 'block';
+    const r = tip.getBoundingClientRect();
+    let x = e.clientX + 14, y = e.clientY + 12;
+    if (x + r.width > innerWidth - 8) x = Math.max(8, e.clientX - r.width - 14);
+    if (y + r.height > innerHeight - 8) y = Math.max(8, innerHeight - r.height - 8);
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    drawClamps();
+  });
+  /* pool chip → clamp box connectors, drawn fresh against the laid-out DOM.
+     Orthogonal trace, not a bezier: drop straight down, rounded corner, run
+     horizontally, rounded corner, drop into the box — stays crisp no matter
+     how sideways the chip sits relative to its clamp. Lower clamp gets the
+     blue trace, upper clamp the orange, matching their box tints. */
+  function drawClamps() {
+    const old = tip.querySelector('svg.clamplink');
+    if (old) old.remove();
+    const pairs = [['chipL', 'lc', 'lc'], ['chipH', 'uc', 'uc']];
+    const tr = tip.getBoundingClientRect();
+    const paths = [];
+    for (const [cid, box, cls] of pairs) {
+      const c = tip.querySelector('#' + cid), b = tip.querySelector(`[data-clampto="${box}"]`);
+      if (!c || !b) continue;
+      const cr = c.getBoundingClientRect(), br = b.getBoundingClientRect();
+      const x1 = cr.left + cr.width / 2 - tr.left, y1 = cr.bottom - tr.top;
+      const x2 = br.left + br.width / 2 - tr.left, y2 = br.top - tr.top;
+      if (y2 <= y1 + 2) continue;                 // overlap (wrapped) — skip
+      const dy = y2 - y1, head = 7;
+      if (Math.abs(x2 - x1) < 2) {                // straight drop, no corners
+        paths.push(`<path class="${cls}" d="M ${x1.toFixed(1)} ${y1.toFixed(1)} L ${x1.toFixed(1)} ${(y2 - head).toFixed(1)}"/>`);
+      } else {
+        const my = y1 + dy / 2;
+        const dx = x2 > x1 ? 1 : -1;
+        const r = Math.min(8, Math.abs(x2 - x1) / 2, my - y1, y2 - head - my);
+        paths.push(
+          `<path class="${cls}" d="M ${x1.toFixed(1)} ${y1.toFixed(1)}`
+          + ` L ${x1.toFixed(1)} ${(my - r).toFixed(1)}`
+          + ` Q ${x1.toFixed(1)} ${my.toFixed(1)}, ${(x1 + dx * r).toFixed(1)} ${my.toFixed(1)}`
+          + ` L ${(x2 - dx * r).toFixed(1)} ${my.toFixed(1)}`
+          + ` Q ${x2.toFixed(1)} ${my.toFixed(1)}, ${x2.toFixed(1)} ${(my + r).toFixed(1)}`
+          + ` L ${x2.toFixed(1)} ${(y2 - head).toFixed(1)}"/>`);
+      }
+      paths.push(`<path class="${cls} ah" d="M ${(x2 - 4.5).toFixed(1)} ${(y2 - head).toFixed(1)} L ${x2.toFixed(1)} ${y2.toFixed(1)} L ${(x2 + 4.5).toFixed(1)} ${(y2 - head).toFixed(1)}"/>`);
+    }
+    if (!paths.length) return;
+    tip.insertAdjacentHTML('beforeend',
+      `<svg class="clamplink" width="${tr.width}" height="${tr.height}">${paths.join('')}</svg>`);
+  }
+  lg.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+}
+sync(); worldReset(); requestAnimationFrame(frame);
+</script>
+</body>
+</html> 
