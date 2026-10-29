@@ -312,6 +312,11 @@
   details.math .mcol { max-width: 72ch; line-height: 1.6; padding-top: 6px; }
   details.math p { margin: 0 0 8px; }
   .note b { color: var(--text); }
+
+  .cfg .presets { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  .cfg .presets .pl { color: var(--muted); }
+  .cfg .presets .pd { color: var(--muted); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -325,12 +330,12 @@
     <div class="grp"><label>speed</label>
       <select id="selSpeed">
         <option value="1">1×</option><option value="4">4×</option>
-        <option value="10">10×</option><option value="30" selected>30×</option>
+        <option value="10">10×</option><option value="30" selected>30×</option><option value="60">60×</option>
         <option value="100">100×</option><option value="300">300×</option>
       </select></div>
     <div class="grp"><label>window</label>
       <select id="selSpan" title="how much history the trend graphs show">
-        <option value="900" selected>15m</option><option value="1800">30m</option>
+        <option value="900">15m</option><option value="1800" selected>30m</option>
         <option value="3600">60m</option><option value="7200">120m</option>
       </select></div>
     <div class="clock" id="clock">t 00:00</div>
@@ -351,6 +356,11 @@
 </header>
 <main>
   <div class="cfg" id="cfgBar">
+<div class="presets"><span class="pl">presets:</span>
+  <button id="btnPreDamp" class="primary">dampened</button>
+  <button id="btnPreUn">undampened</button>
+  <span class="pd">dampened — windows 60 s up / 300 s down · +2 pods·50 % / −1 pod·25 %
+    · undampened — 60 s / 60 s · ±10 pods·100 % · both min 1 / max 20</span></div>
 <pre class="yamlbox"><span class="k">apiVersion:</span> apps/v1
 <span class="k">kind:</span> Deployment
 <span class="k">spec:</span>
@@ -2217,7 +2227,7 @@
   // src/main.ts
   var $2 = (id) => document.getElementById(id);
   var cfg = defaultCfg();
-  var span = 900;
+  var span = 1800;
   var speed = 30;
   var running = false;
   var lastReal = 0;
@@ -2391,6 +2401,48 @@
     renderAll(true);
   };
   $2("btnCfg").onclick = () => $2("cfgBar").classList.toggle("open");
+  var PRESETS = {
+    damp: {
+      yMin: "1",
+      yMax: "20",
+      yUpWin: "60",
+      yUpPods: "2",
+      yUpPodsPer: "60",
+      yUpPct: "50",
+      yUpPctPer: "60",
+      yUpSel: "Max",
+      yDnWin: "300",
+      yDnPods: "1",
+      yDnPodsPer: "60",
+      yDnPct: "25",
+      yDnPctPer: "60",
+      yDnSel: "Min"
+    },
+    un: {
+      yMin: "1",
+      yMax: "20",
+      yUpWin: "60",
+      yUpPods: "10",
+      yUpPodsPer: "60",
+      yUpPct: "100",
+      yUpPctPer: "60",
+      yUpSel: "Max",
+      yDnWin: "60",
+      yDnPods: "10",
+      yDnPodsPer: "60",
+      yDnPct: "100",
+      yDnPctPer: "60",
+      yDnSel: "Min"
+    }
+  };
+  function applyPreset(which) {
+    for (const [id, v] of Object.entries(PRESETS[which])) $2(id).value = v;
+    $2("btnPreDamp").classList.toggle("primary", which === "damp");
+    $2("btnPreUn").classList.toggle("primary", which === "un");
+    worldReset();
+  }
+  $2("btnPreDamp").onclick = () => applyPreset("damp");
+  $2("btnPreUn").onclick = () => applyPreset("un");
   $2("btnBurst").onclick = () => world.burst(Math.max(1, +$2("inpBurst").value || 0));
   $2("btnDice").onclick = () => {
     $2("inpSeed").value = String(Math.floor(Math.random() * 1e6));
