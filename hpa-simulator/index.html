@@ -360,7 +360,7 @@
   <button id="btnPreDamp" class="primary">dampened</button>
   <button id="btnPreUn">undampened</button>
   <span class="pd">dampened — windows 60 s up / 300 s down · +2 pods·50 % / −1 pod·25 %
-    · undampened — 60 s / 60 s · ±10 pods·100 % · both min 1 / max 20</span></div>
+    · undampened — 60 s / 60 s · ±10 pods·100 % · both min 3 / max 20</span></div>
 <pre class="yamlbox"><span class="k">apiVersion:</span> apps/v1
 <span class="k">kind:</span> Deployment
 <span class="k">spec:</span>
@@ -2403,7 +2403,7 @@
   $2("btnCfg").onclick = () => $2("cfgBar").classList.toggle("open");
   var PRESETS = {
     damp: {
-      yMin: "1",
+      yMin: "3",
       yMax: "20",
       yUpWin: "60",
       yUpPods: "2",
@@ -2419,7 +2419,7 @@
       yDnSel: "Min"
     },
     un: {
-      yMin: "1",
+      yMin: "3",
       yMax: "20",
       yUpWin: "60",
       yUpPods: "10",
